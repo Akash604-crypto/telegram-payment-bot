@@ -49,7 +49,7 @@ REMITLY_HOW_TO_PAY_LINK = os.getenv(
     "REMITLY_HOW_TO_PAY_LINK", "https://t.me/+8jECICY--sU2MjIx"
 )
 
-HELP_BOT_USERNAME = os.getenv("HELP_BOT_USERNAME", "https://t.me/Dark123222_bot")
+HELP_BOT_USERNAME = os.getenv("HELP_BOT_USERNAME", "@Dark123222_bot")
 
 # Timezone (IST)
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -321,12 +321,11 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ---------- APPROVE / DECLINE BY ADMIN ----------
-    if data.startswith("approve:") or data.startswith("decline:"):
-        # (your existing approve/decline code here, unchanged)
-      
+# ---------- APPROVE / DECLINE BY ADMIN ----------
+if data.startswith("approve:") or data.startswith("decline:"):
+    action, payment_id = data.split(":", 1)
+    payment = PENDING_PAYMENTS.get(payment_id)
 
-        action, payment_id = data.split(":", 1)
-        payment = PENDING_PAYMENTS.get(payment_id)
 
         if query.from_user.id != ADMIN_CHAT_ID:
             await query.answer("Only admin can use this.", show_alert=True)
@@ -681,6 +680,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
