@@ -224,7 +224,7 @@ async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         logging.error(f"Error forwarding message to admin: {e}")
 
-    # Send a separate message to admin with buttons
+       # Send a separate message to admin with buttons
     keyboard = [
         [
             InlineKeyboardButton("✅ Approve", callback_data=f"approve:{payment_id}"),
@@ -233,7 +233,7 @@ async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYP
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-      admin_text = (
+    admin_text = (
         "💰 New payment request\n\n"
         f"From: @{user.username or 'NoUsername'} (ID: {user.id})\n"
         f"Method: {payment_type.upper()}\n"
@@ -249,6 +249,8 @@ async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYP
         )
     except Exception as e:
         logging.error(f"Error sending admin decision message: {e}")
+
+
 
 
     # Confirm to user
@@ -281,6 +283,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
