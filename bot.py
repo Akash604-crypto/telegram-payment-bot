@@ -216,14 +216,16 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
         return
 
-    if data == "plan_help":
-        msg = (
-            "🆘 *Help & Support*\n\n"
-            f"For any questions, contact: {HELP_BOT_USERNAME}\n\n"
-            "You can always type /start again to restart the menu."
-        )
-        await query.message.edit_text(msg, parse_mode="Markdown")
-        return
+# ---------- HELP BUTTON ----------
+if data == "plan_help":
+    await query.message.reply_text(
+        "🆘 *Help & Support*\n\n"
+        f"For any assistance, contact: {HELP_BOT_USERNAME}\n\n"
+        "Type /start anytime to restart.",
+        parse_mode="Markdown"
+    )
+    return
+
 
     if data == "back_start":
         fake_update = Update(update.update_id, message=update.effective_message)
@@ -683,4 +685,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
