@@ -49,7 +49,7 @@ REMITLY_HOW_TO_PAY_LINK = os.getenv(
     "REMITLY_HOW_TO_PAY_LINK", "https://t.me/+8jECICY--sU2MjIx"
 )
 
-HELP_BOT_USERNAME = os.getenv("HELP_BOT_USERNAME", "@Dark123222_bot")
+HELP_BOT_USERNAME = os.getenv("HELP_BOT_USERNAME", "https://t.me/Dark123222_bot")
 
 # Timezone (IST)
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -65,12 +65,12 @@ PRICE_CONFIG = {
     "dark": {     # Dark channel only
         "upi_inr": 1999,
         "crypto_usd": 24,
-        "remit_inr": 499,
+        "remit_inr": 1999,
     },
     "both": {     # Both channels with 30% OFF on combined prices
         "upi_inr": 1749,     # (499 + 1999) * 0.7
         "crypto_usd": 21,    # (6 + 24) * 0.7
-        "remit_inr": 699,    # (499 + 499) * 0.7
+        "remit_inr": 1749,    # (499 + 1999) * 0.7
     },
 }
 
@@ -683,3 +683,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
