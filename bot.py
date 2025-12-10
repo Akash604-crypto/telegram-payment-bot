@@ -227,7 +227,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start(fake_update, context)
         return
 
-    # ---------- PAYMENT METHOD BUTTONS ----------
+       # ---------- PAYMENT METHOD BUTTONS ----------
     user_plan = context.user_data.get("selected_plan")
     if data in ("pay_upi", "pay_crypto", "pay_remitly") and not user_plan:
         await query.message.reply_text(
@@ -384,6 +384,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         PENDING_PAYMENTS.pop(payment_id, None)
+
 
 # ----------------- PAYMENT PROOF HANDLING -----------------
 
@@ -677,6 +678,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
