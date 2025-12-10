@@ -211,15 +211,15 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
         return
 
-    # ---------- HELP BUTTON ----------
-    if data == "plan_help":
-        await query.message.edit_text(
-            "🆘 *Help & Support*\n\n"
-            f"For any assistance, contact: {HELP_BOT_USERNAME}\n\n"
-            "Type /start anytime to restart.",
-            parse_mode="Markdown",
-        )
-        return
+# ---------- HELP BUTTON ----------
+if data == "plan_help":
+    await query.message.edit_text(
+        "🆘 Help & Support\n\n"
+        f"For any assistance, contact: {HELP_BOT_USERNAME}\n\n"
+        "Type /start anytime to restart."
+    )
+    return
+
 
     # ---------- BACK TO START ----------
     if data == "back_start":
@@ -678,6 +678,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
