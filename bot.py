@@ -50,6 +50,8 @@ REMITLY_HOW_TO_PAY_LINK = os.getenv(
 )
 
 HELP_BOT_USERNAME = os.getenv("HELP_BOT_USERNAME", "@Dark123222_bot")
+HELP_BOT_USERNAME_MD = HELP_BOT_USERNAME.replace("_", "\\_")
+
 
 # Timezone (IST)
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -85,6 +87,8 @@ PLAN_LABELS = {
 PENDING_PAYMENTS = {}    # payment_id -> {user_id,...}
 PURCHASE_LOG = []        # simple income log
 KNOWN_USERS = set()      # for broadcast
+SENT_INVITES = {}  # user_id -> {"vip": invite_link, "dark": invite_link}
+
 
 
 # ----------------- HELPERS -----------------
@@ -99,21 +103,43 @@ def now_ist() -> datetime:
 
 
 async def send_access_links(context: ContextTypes.DEFAULT_TYPE, user_id: int, plan: str):
+    """
+    Create one single-use invite link per channel for this user and send it.
+    Uses member_limit=1 and optional name so links are identifiable in channel settings.
+    Stores generated links in SENT_INVITES so you can resend without creating new links.
+    """
     links_text = []
     try:
-        if plan in ("vip", "both") and VIP_CHANNEL_ID != 0:
-            vip_invite = await context.bot.create_chat_invite_link(
-                chat_id=VIP_CHANNEL_ID,
-                member_limit=1,
-            )
-            links_text.append(f"🔑 VIP Channel:\n{vip_invite.invite_link}")
+        # ensure user bucket exists
+        user_links = SENT_INVITES.setdefault(user_id, {})
 
-        if plan in ("dark", "both") and DARK_CHANNEL_ID != 0:
-            dark_invite = await context.bot.create_chat_invite_link(
-                chat_id=DARK_CHANNEL_ID,
-                member_limit=1,
-            )
-            links_text.append(f"🕶 Dark Channel:\n{dark_invite.invite_link}")
+        # VIP
+        if plan in ("vip", "both") and VIP_CHANNEL_ID:
+            if "vip" in user_links:
+                vip_link = user_links["vip"]
+            else:
+                vip_link_obj = await context.bot.create_chat_invite_link(
+                    chat_id=VIP_CHANNEL_ID,
+                    member_limit=1,
+                    name=f"user_{user_id}_vip"
+                )
+                vip_link = vip_link_obj.invite_link
+                user_links["vip"] = vip_link
+            links_text.append(f"🔑 VIP Channel:\n{vip_link}")
+
+        # DARK
+        if plan in ("dark", "both") and DARK_CHANNEL_ID:
+            if "dark" in user_links:
+                dark_link = user_links["dark"]
+            else:
+                dark_link_obj = await context.bot.create_chat_invite_link(
+                    chat_id=DARK_CHANNEL_ID,
+                    member_limit=1,
+                    name=f"user_{user_id}_dark"
+                )
+                dark_link = dark_link_obj.invite_link
+                user_links["dark"] = dark_link
+            links_text.append(f"🕶 Dark Channel:\n{dark_link}")
 
     except Exception as e:
         logger.error(f"Error creating invite links for user {user_id}: {e}")
@@ -128,6 +154,7 @@ async def send_access_links(context: ContextTypes.DEFAULT_TYPE, user_id: int, pl
         )
 
     await context.bot.send_message(chat_id=user_id, text=text)
+
 
 
 def get_price(plan: str, method: str):
@@ -190,16 +217,8 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = [
             [InlineKeyboardButton(f"💳 UPI (₹{upi_price})", callback_data="pay_upi")],
-            [
-                InlineKeyboardButton(
-                    f"🪙 Crypto (${crypto_price})", callback_data="pay_crypto"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    f"🌍 Remitly (₹{remit_price})", callback_data="pay_remitly"
-                )
-            ],
+            [InlineKeyboardButton(f"🪙 Crypto (${crypto_price})", callback_data="pay_crypto")],
+            [InlineKeyboardButton(f"🌍 Remitly (₹{remit_price})", callback_data="pay_remitly")],
             [InlineKeyboardButton("⬅ Back", callback_data="back_start")],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -211,14 +230,19 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
         return
 
-# ---------- HELP BUTTON ----------
-if data == "plan_help":
-    await query.message.edit_text(
-        "🆘 Help & Support\n\n"
-        f"For any assistance, contact: {HELP_BOT_USERNAME}\n\n"
-        "Type /start anytime to restart."
-    )
-    return
+    # ---------- HELP BUTTON ----------
+    if data == "plan_help":
+        help_text = (
+            "🆘 *Help & Support*\n\n"
+            f"For any assistance, contact: {HELP_BOT_USERNAME_MD}\n\n"
+            "Type /start anytime to restart."
+        )
+        # Try to edit the message; fallback to reply if edit fails
+        try:
+            await query.message.edit_text(help_text, parse_mode="Markdown")
+        except Exception:
+            await query.message.reply_text(help_text)
+        return
 
 
     # ---------- BACK TO START ----------
@@ -227,7 +251,7 @@ if data == "plan_help":
         await start(fake_update, context)
         return
 
-       # ---------- PAYMENT METHOD BUTTONS ----------
+    # ---------- PAYMENT METHOD BUTTONS ----------
     user_plan = context.user_data.get("selected_plan")
     if data in ("pay_upi", "pay_crypto", "pay_remitly") and not user_plan:
         await query.message.reply_text(
@@ -271,7 +295,6 @@ if data == "plan_help":
             )
 
             await query.message.reply_text(msg, parse_mode="Markdown")
-
             await query.message.reply_photo(
                 photo=UPI_QR_URL,
                 caption=f"📷 Scan this QR to pay via UPI.\nUPI ID: `{UPI_ID}`",
@@ -480,6 +503,33 @@ async def warn_text_not_allowed(update: Update, context: ContextTypes.DEFAULT_TY
 # (broadcast, income, set_price, set_upi, set_crypto, set_remitly)
 #  -- keep your existing implementations here, they were fine --
 
+async def set_vip_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global VIP_CHANNEL_ID
+    user = update.effective_user
+    if not is_admin(user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /set_vip <channel_id>")
+        return
+    try:
+        VIP_CHANNEL_ID = int(context.args[0])
+        await update.message.reply_text(f"VIP_CHANNEL_ID updated to {VIP_CHANNEL_ID}")
+    except ValueError:
+        await update.message.reply_text("channel_id must be an integer (e.g. -1001234567890)")
+
+async def set_dark_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global DARK_CHANNEL_ID
+    user = update.effective_user
+    if not is_admin(user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /set_dark <channel_id>")
+        return
+    try:
+        DARK_CHANNEL_ID = int(context.args[0])
+        await update.message.reply_text(f"DARK_CHANNEL_ID updated to {DARK_CHANNEL_ID}")
+    except ValueError:
+        await update.message.reply_text("channel_id must be an integer (e.g. -1009876543210)")
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -657,7 +707,12 @@ def main():
     app.add_handler(CommandHandler("set_crypto", set_crypto))
     app.add_handler(CommandHandler("set_remitly", set_remitly))
 
+    # admin helpers to set channel IDs at runtime
+    app.add_handler(CommandHandler("set_vip", set_vip_channel))
+    app.add_handler(CommandHandler("set_dark", set_dark_channel))
+
     app.add_handler(CallbackQueryHandler(handle_buttons))
+
 
     app.add_handler(
         MessageHandler(
@@ -678,6 +733,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
