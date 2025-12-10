@@ -268,7 +268,7 @@ def main():
     # Photos, documents, text as proof
     app.add_handler(
         MessageHandler(
-            (filters.PHOTO | filters.Document | filters.TEXT) & ~filters.COMMAND,
+            (filters.PHOTO | filters.Document.ALL | filters.TEXT) & ~filters.COMMAND,
             handle_payment_proof,
         )
     )
@@ -278,5 +278,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
