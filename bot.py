@@ -144,36 +144,6 @@ def get_price(plan: str, method: str):
 # ----------------- COMMAND HANDLERS (USER) -----------------
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    KNOWN_USERS.add(user.id)
-
-    keyboard = [
-        [InlineKeyboardButton("💎 VIP Channel (₹499)", callback_data="plan_vip")],
-        [InlineKeyboardButton("🕶 Dark Channel (₹1999)", callback_data="plan_dark")],
-        [InlineKeyboardButton("🔥 Both (30% OFF)", callback_data="plan_both")],
-        [InlineKeyboardButton("🆘 Help", callback_data="plan_help")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    text = (
-        "Welcome to Payment Bot 👋\n\n"
-        "Choose what you want to unlock:\n"
-        "• 💎 VIP Channel – premium content\n"
-        "• 🕶 Dark Channel – ultra premium\n"
-        "• 🔥 Both – combo offer with 30% OFF\n\n"
-        "After you choose a plan, I'll show payment options."
-    )
-
-    if update.message:
-        await update.message.reply_text(text, reply_markup=reply_markup)
-    else:
-        await update.callback_query.message.reply_text(text, reply_markup=reply_markup)
-
-
-# ----------------- BUTTON HANDLER -----------------
-
-
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -216,17 +186,17 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
         return
 
-# ---------- HELP BUTTON ----------
-if data == "plan_help":
-    await query.message.reply_text(
-        "🆘 *Help & Support*\n\n"
-        f"For any assistance, contact: {HELP_BOT_USERNAME}\n\n"
-        "Type /start anytime to restart.",
-        parse_mode="Markdown"
-    )
-    return
+    # ---------- HELP BUTTON ----------
+    if data == "plan_help":
+        await query.message.edit_text(
+            "🆘 *Help & Support*\n\n"
+            f"For any assistance, contact: {HELP_BOT_USERNAME}\n\n"
+            "Type /start anytime to restart.",
+            parse_mode="Markdown",
+        )
+        return
 
-
+    # ---------- BACK TO START ----------
     if data == "back_start":
         fake_update = Update(update.update_id, message=update.effective_message)
         await start(fake_update, context)
@@ -275,10 +245,8 @@ if data == "plan_help":
                 "I’ll verify and then send your access links. ✅"
             )
 
-            # 1) Send text instructions
             await query.message.reply_text(msg, parse_mode="Markdown")
 
-            # 2) Send ONLY QR image (no visible URL)
             await query.message.reply_photo(
                 photo=UPI_QR_URL,
                 caption=f"📷 Scan this QR to pay via UPI.\nUPI ID: `{UPI_ID}`",
@@ -329,6 +297,9 @@ if data == "plan_help":
 
     # ---------- APPROVE / DECLINE BY ADMIN ----------
     if data.startswith("approve:") or data.startswith("decline:"):
+        # (your existing approve/decline code here, unchanged)
+        ...
+
         action, payment_id = data.split(":", 1)
         payment = PENDING_PAYMENTS.get(payment_id)
 
@@ -685,5 +656,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
