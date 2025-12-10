@@ -280,25 +280,28 @@ async def warn_text_not_allowed(update: Update, context: ContextTypes.DEFAULT_TY
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # Start & buttons
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_buttons))
 
-    # Photos, documents, text as proof
-# Accept only screenshots/documents as payment proof
-app.add_handler(
-    MessageHandler(
-        (filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
-        handle_payment_proof,
+    # Accept only screenshots/documents as payment proof
+    app.add_handler(
+        MessageHandler(
+            (filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
+            handle_payment_proof,
+        )
     )
-)
 
-# Warn users if they send text instead of screenshot
-app.add_handler(
-    MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        warn_text_not_allowed
+    # Warn users if they send text instead of screenshot
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            warn_text_not_allowed
+        )
     )
-)
+
+    app.run_polling()
+
 
 
     app.run_polling()
@@ -306,6 +309,7 @@ app.add_handler(
 
 if __name__ == "__main__":
     main()
+
 
 
 
