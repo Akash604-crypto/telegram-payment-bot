@@ -233,20 +233,23 @@ async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYP
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    admin_text = (
-        "💰 *New payment request*\n\n"
-        f"From: @{user.username or 'NoUsername'} (ID: `{user.id}`)\n"
-        f"Method: *{payment_type.upper()}*\n"
-        f"Payment ID: `{payment_id}`\n\n"
-        "Check the forwarded screenshot/message above, then choose:"
+      admin_text = (
+        "💰 New payment request\n\n"
+        f"From: @{user.username or 'NoUsername'} (ID: {user.id})\n"
+        f"Method: {payment_type.upper()}\n"
+        f"Payment ID: {payment_id}\n\n"
+        "Check the forwarded screenshot/message above, then tap Approve or Decline:"
     )
 
-    await context.bot.send_message(
-        chat_id=ADMIN_CHAT_ID,
-        text=admin_text,
-        parse_mode="Markdown",
-        reply_markup=reply_markup,
-    )
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=admin_text,
+            reply_markup=reply_markup,
+        )
+    except Exception as e:
+        logging.error(f"Error sending admin decision message: {e}")
+
 
     # Confirm to user
     await message.reply_text(
@@ -278,6 +281,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
