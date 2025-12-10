@@ -19,9 +19,12 @@ logging.basicConfig(
 )
 
 # 🔹 CONFIG
-BOT_TOKEN = "8385528484:AAH6HpUQu3PISvyIwkBk4iH5URuZEayzSyM"  # <- replace with your full token
-ADMIN_CHAT_ID = 7544175757              # your Telegram user ID
-ACCESS_LINK = "https://t.me/+hIrk0OWg28QzMmJl"  # access link after approval
+import os
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
+ACCESS_LINK = os.getenv("ACCESS_LINK")
+
 
 UPI_ID = "technovastore641100.rzp@icici"
 UPI_QR_URL = "https://i.ibb.co/zHrLF0Xg/Whats-App-Image-2025-12-10-at-21-15-51-06c97f44.jpg"
@@ -274,3 +277,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
