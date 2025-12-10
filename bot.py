@@ -262,6 +262,19 @@ async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Clear waiting flag (optional)
     context.user_data["waiting_for_proof"] = None
+    
+async def warn_text_not_allowed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    payment_type = context.user_data.get("waiting_for_proof")
+
+    # If they haven't clicked a payment method, ignore
+    if not payment_type:
+        return
+
+    await update.message.reply_text(
+        "⚠️ Please *send a screenshot/photo only*.\n"
+        "Text messages cannot be verified.",
+        parse_mode="Markdown"
+    )
 
 
 def main():
@@ -271,18 +284,29 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_buttons))
 
     # Photos, documents, text as proof
-    app.add_handler(
-        MessageHandler(
-            (filters.PHOTO | filters.Document.ALL | filters.TEXT) & ~filters.COMMAND,
-            handle_payment_proof,
-        )
+# Accept only screenshots/documents as payment proof
+app.add_handler(
+    MessageHandler(
+        (filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
+        handle_payment_proof,
     )
+)
+
+# Warn users if they send text instead of screenshot
+app.add_handler(
+    MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        warn_text_not_allowed
+    )
+)
+
 
     app.run_polling()
 
 
 if __name__ == "__main__":
     main()
+
 
 
 
