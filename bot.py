@@ -321,11 +321,9 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ---------- APPROVE / DECLINE BY ADMIN ----------
-# ---------- APPROVE / DECLINE BY ADMIN ----------
-if data.startswith("approve:") or data.startswith("decline:"):
-    action, payment_id = data.split(":", 1)
-    payment = PENDING_PAYMENTS.get(payment_id)
-
+    if data.startswith("approve:") or data.startswith("decline:"):
+        action, payment_id = data.split(":", 1)
+        payment = PENDING_PAYMENTS.get(payment_id)
 
         if query.from_user.id != ADMIN_CHAT_ID:
             await query.answer("Only admin can use this.", show_alert=True)
@@ -386,7 +384,6 @@ if data.startswith("approve:") or data.startswith("decline:"):
             )
 
         PENDING_PAYMENTS.pop(payment_id, None)
-
 
 # ----------------- PAYMENT PROOF HANDLING -----------------
 
@@ -680,6 +677,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
