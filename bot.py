@@ -1,3 +1,4 @@
+import os
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -19,7 +20,7 @@ logging.basicConfig(
 )
 
 # 🔹 CONFIG
-import os
+
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
@@ -277,4 +278,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
