@@ -44,7 +44,6 @@ CRYPTO_ADDRESS = os.getenv(
 )
 CRYPTO_NETWORK = os.getenv("CRYPTO_NETWORK", "BEP20")
 
-# Short text that explains Remitly steps (we’ll still show fixed instructions)
 REMITLY_INFO = os.getenv("REMITLY_INFO", "Send ₹499 via Remitly to given UPI.")
 REMITLY_HOW_TO_PAY_LINK = os.getenv(
     "REMITLY_HOW_TO_PAY_LINK", "https://t.me/+8jECICY--sU2MjIx"
@@ -57,7 +56,6 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 # ----------------- PRODUCTS & PRICES -----------------
 
-# prices are defaults – admin can change with /set_price
 PRICE_CONFIG = {
     "vip": {      # VIP channel only
         "upi_inr": 499,
@@ -70,12 +68,9 @@ PRICE_CONFIG = {
         "remit_inr": 499,
     },
     "both": {     # Both channels with 30% OFF on combined prices
-        # UPI: (499 + 1999) * 0.7 = 1748.6 -> 1749
-        "upi_inr": 1749,
-        # Crypto: (6 + 24) * 0.7 = 21
-        "crypto_usd": 21,
-        # Remitly: (499 + 499) * 0.7 ≈ 699
-        "remit_inr": 699,
+        "upi_inr": 1749,     # (499 + 1999) * 0.7
+        "crypto_usd": 21,    # (6 + 24) * 0.7
+        "remit_inr": 699,    # (499 + 499) * 0.7
     },
 }
 
@@ -87,14 +82,9 @@ PLAN_LABELS = {
 
 # ----------------- RUNTIME STORAGE -----------------
 
-# payment_id -> {user_id, username, plan, method, amount, currency}
-PENDING_PAYMENTS = {}
-
-# simple purchase log for income insights (resets if bot restarts)
-PURCHASE_LOG = []  # list of dicts
-
-# set of all user ids (for broadcast)
-KNOWN_USERS = set()
+PENDING_PAYMENTS = {}    # payment_id -> {user_id,...}
+PURCHASE_LOG = []        # simple income log
+KNOWN_USERS = set()      # for broadcast
 
 
 # ----------------- HELPERS -----------------
@@ -109,10 +99,6 @@ def now_ist() -> datetime:
 
 
 async def send_access_links(context: ContextTypes.DEFAULT_TYPE, user_id: int, plan: str):
-    """
-    Create per-user invite links for VIP / DARK channels based on plan
-    and send them to the buyer.
-    """
     links_text = []
     try:
         if plan in ("vip", "both") and VIP_CHANNEL_ID != 0:
@@ -145,11 +131,6 @@ async def send_access_links(context: ContextTypes.DEFAULT_TYPE, user_id: int, pl
 
 
 def get_price(plan: str, method: str):
-    """
-    plan: 'vip' | 'dark' | 'both'
-    method: 'upi' | 'crypto' | 'remitly'
-    returns (amount, currency_str)
-    """
     cfg = PRICE_CONFIG.get(plan, {})
     if method == "upi":
         return cfg.get("upi_inr"), "INR"
@@ -203,12 +184,11 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data in ("plan_vip", "plan_dark", "plan_both"):
         plan = data.split("_", 1)[1]  # 'vip' | 'dark' | 'both'
         context.user_data["selected_plan"] = plan
-        context.user_data["waiting_for_proof"] = None  # reset
+        context.user_data["waiting_for_proof"] = None
         context.user_data["payment_deadline"] = None
 
         label = PLAN_LABELS.get(plan, plan.upper())
 
-        # Show prices for this plan
         upi_price, _ = get_price(plan, "upi")
         crypto_price, _ = get_price(plan, "crypto")
         remit_price, _ = get_price(plan, "remitly")
@@ -246,7 +226,6 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "back_start":
-        # Go back to main menu
         fake_update = Update(update.update_id, message=update.effective_message)
         await start(fake_update, context)
         return
@@ -271,40 +250,38 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount, currency = get_price(user_plan, method)
         label = PLAN_LABELS.get(user_plan, user_plan.upper())
 
-        # 30-min deadline
         deadline = now_ist() + timedelta(minutes=30)
         context.user_data["payment_deadline"] = deadline.timestamp()
         deadline_str = deadline.strftime("%d %b %Y, %I:%M %p IST")
 
         if method == "upi":
-msg = (
-    "🧾 *UPI Payment Instructions*\n\n"
-    f"Plan: *{label}*\n"
-    f"Amount: *₹{amount}*\n\n"
-    f"UPI ID: `{UPI_ID}`\n\n"
-    "1️⃣ Open any UPI app (GPay, PhonePe, Paytm, etc.)\n"
-    "2️⃣ Choose *Scan & Pay* or *Pay UPI ID*\n"
-    "3️⃣ Either scan the QR image below or pay directly to the UPI ID above.\n"
-    "4️⃣ Enter the amount shown above and confirm.\n\n"
-    f"If you're confused, see this guide: {UPI_HOW_TO_PAY_LINK}\n\n"
-    f"⏳ *Time limit:* Please pay within 30 minutes.\n"
-    f"Your slot expires at: *{deadline_str}*\n\n"
-    "*After payment send me here:*\n"
-    "• Payment screenshot (photo)\n"
-    "• UTR number (optional, as text)\n"
-    "I’ll verify and then send your access links. ✅"
-)
+            msg = (
+                "🧾 *UPI Payment Instructions*\n\n"
+                f"Plan: *{label}*\n"
+                f"Amount: *₹{amount}*\n\n"
+                f"UPI ID: `{UPI_ID}`\n\n"
+                "1️⃣ Open any UPI app (GPay, PhonePe, Paytm, etc.)\n"
+                "2️⃣ Choose *Scan & Pay* or *Pay UPI ID*\n"
+                "3️⃣ Either scan the QR image below or pay directly to the UPI ID above.\n"
+                "4️⃣ Enter the amount shown above and confirm.\n\n"
+                f"If you're confused, see this guide: {UPI_HOW_TO_PAY_LINK}\n\n"
+                f"⏳ *Time limit:* Please pay within 30 minutes.\n"
+                f"Your slot expires at: *{deadline_str}*\n\n"
+                "*After payment send me here:*\n"
+                "• Payment screenshot (photo)\n"
+                "• UTR number (optional, as text)\n"
+                "I’ll verify and then send your access links. ✅"
+            )
 
-# 1) Send text instructions
-await query.message.reply_text(msg, parse_mode="Markdown")
+            # 1) Send text instructions
+            await query.message.reply_text(msg, parse_mode="Markdown")
 
-# 2) Send ONLY QR image (no visible URL)
-await query.message.reply_photo(
-    photo=UPI_QR_URL,
-    caption=f"📷 Scan this QR to pay via UPI.\nUPI ID: `{UPI_ID}`",
-    parse_mode="Markdown",
-)
-
+            # 2) Send ONLY QR image (no visible URL)
+            await query.message.reply_photo(
+                photo=UPI_QR_URL,
+                caption=f"📷 Scan this QR to pay via UPI.\nUPI ID: `{UPI_ID}`",
+                parse_mode="Markdown",
+            )
 
         elif method == "crypto":
             msg = (
@@ -371,7 +348,6 @@ await query.message.reply_photo(
         username = payment["username"]
 
         if action == "approve":
-            # Log purchase for income stats
             PURCHASE_LOG.append(
                 {
                     "time": now_ist(),
@@ -384,7 +360,6 @@ await query.message.reply_photo(
                 }
             )
 
-            # Send access links
             try:
                 await send_access_links(context, user_id, plan)
             except Exception as e:
@@ -428,10 +403,8 @@ async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYP
     plan = context.user_data.get("selected_plan")
 
     if not method or not plan:
-        # Not in payment flow
         return
 
-    # Respect 30-min deadline (for info only)
     deadline_ts = context.user_data.get("payment_deadline")
     expired_note = ""
     if deadline_ts:
@@ -452,7 +425,6 @@ async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYP
         "currency": currency,
     }
 
-    # Forward screenshot/doc to admin
     try:
         await context.bot.forward_message(
             chat_id=ADMIN_CHAT_ID,
@@ -462,7 +434,6 @@ async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         logger.error(f"Error forwarding message to admin: {e}")
 
-    # Admin decision buttons
     keyboard = [
         [
             InlineKeyboardButton("✅ Approve", callback_data=f"approve:{payment_id}"),
@@ -490,18 +461,13 @@ async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         logger.error(f"Error sending admin decision message: {e}")
 
-    # Confirm to user
     await message.reply_text(
         "✅ Payment proof received.\n\n"
         "Please wait while we manually verify it. "
         "You will get your channel access links here after approval. ⏳"
     )
 
-    # Optional: keep waiting_for_proof so they can resend better screenshot
-    # context.user_data["waiting_for_proof"] = None
 
-
-# Warn if user sends TEXT instead of screenshot during payment
 async def warn_text_not_allowed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     method = context.user_data.get("waiting_for_proof")
     plan = context.user_data.get("selected_plan")
@@ -516,6 +482,8 @@ async def warn_text_not_allowed(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 # ----------------- ADMIN COMMANDS -----------------
+# (broadcast, income, set_price, set_upi, set_crypto, set_remitly)
+#  -- keep your existing implementations here, they were fine --
 
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -550,7 +518,6 @@ async def income(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(user.id):
         return
 
-    # Default range: today
     mode = "today"
     if context.args:
         mode = context.args[0].lower()
@@ -566,7 +533,7 @@ async def income(update: Update, context: ContextTypes.DEFAULT_TYPE):
         end = now
         start = now - timedelta(days=7)
         label = "Last 7 days"
-    else:  # today
+    else:
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end = start + timedelta(days=1)
         label = "Today"
@@ -686,10 +653,8 @@ def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # User commands
     app.add_handler(CommandHandler("start", start))
 
-    # Admin commands
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("income", income))
     app.add_handler(CommandHandler("set_price", set_price))
@@ -697,10 +662,8 @@ def main():
     app.add_handler(CommandHandler("set_crypto", set_crypto))
     app.add_handler(CommandHandler("set_remitly", set_remitly))
 
-    # Buttons
     app.add_handler(CallbackQueryHandler(handle_buttons))
 
-    # Payment proof: only photos/documents
     app.add_handler(
         MessageHandler(
             (filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
@@ -708,7 +671,6 @@ def main():
         )
     )
 
-    # Text during payment flow → warning, no forwarding
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
