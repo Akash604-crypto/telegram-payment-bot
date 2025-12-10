@@ -140,6 +140,31 @@ def get_price(plan: str, method: str):
         return cfg.get("remit_inr"), "INR"
     return None, ""
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    KNOWN_USERS.add(user.id)
+
+    keyboard = [
+        [InlineKeyboardButton("💎 VIP Channel (₹499)", callback_data="plan_vip")],
+        [InlineKeyboardButton("🕶 Dark Channel (₹1999)", callback_data="plan_dark")],
+        [InlineKeyboardButton("🔥 Both (30% OFF)", callback_data="plan_both")],
+        [InlineKeyboardButton("🆘 Help", callback_data="plan_help")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    text = (
+        "Welcome to Payment Bot 👋\n\n"
+        "Choose what you want to unlock:\n"
+        "• 💎 VIP Channel – premium content\n"
+        "• 🕶 Dark Channel – ultra premium\n"
+        "• 🔥 Both – combo offer with 30% OFF\n\n"
+        "After you choose a plan, I'll show payment options."
+    )
+
+    if update.message:
+        await update.message.reply_text(text, reply_markup=reply_markup)
+    else:
+        await update.callback_query.message.reply_text(text, reply_markup=reply_markup)
 
 # ----------------- COMMAND HANDLERS (USER) -----------------
 
@@ -298,7 +323,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---------- APPROVE / DECLINE BY ADMIN ----------
     if data.startswith("approve:") or data.startswith("decline:"):
         # (your existing approve/decline code here, unchanged)
-        ...
+      
 
         action, payment_id = data.split(":", 1)
         payment = PENDING_PAYMENTS.get(payment_id)
@@ -656,6 +681,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
