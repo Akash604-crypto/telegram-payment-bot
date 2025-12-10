@@ -230,19 +230,22 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
         return
 
-    # ---------- HELP BUTTON ----------
-    if data == "plan_help":
-        help_text = (
-            "🆘 *Help & Support*\n\n"
-            f"For any assistance, contact: {HELP_BOT_USERNAME_MD}\n\n"
-            "Type /start anytime to restart."
-        )
-        # Try to edit the message; fallback to reply if edit fails
-        try:
-            await query.message.edit_text(help_text, parse_mode="Markdown")
-        except Exception:
-            await query.message.reply_text(help_text)
-        return
+# ---------- HELP BUTTON ----------
+if data == "plan_help":
+    help_text = (
+        "🆘 *Help & Support*\n\n"
+        f"For any assistance, contact: {HELP_BOT_USERNAME_MD}\n\n"
+        "Type /start anytime to restart."
+    )
+
+    # Safe edit (fallback if previous message was deleted or markdown error)
+    try:
+        await query.message.edit_text(help_text, parse_mode="Markdown")
+    except Exception:
+        await query.message.reply_text(help_text, parse_mode="Markdown")
+
+    return
+
 
 
     # ---------- BACK TO START ----------
@@ -733,6 +736,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
