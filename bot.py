@@ -4,9 +4,13 @@ import json
 import tempfile
 import shutil
 import logging
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -14,22 +18,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
     filters,
-    ChatJoinRequestHandler,   
-)
-
-
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters,
+    ChatJoinRequestHandler,
 )
 
 # ----------------- LOGGING -----------------
@@ -53,9 +42,7 @@ UPI_QR_URL = os.getenv(
 )
 UPI_HOW_TO_PAY_LINK = os.getenv("UPI_HOW_TO_PAY_LINK", "https://t.me/+bGduXUnCJk8zNzNh")
 
-CRYPTO_ADDRESS = os.getenv(
-    "CRYPTO_ADDRESS", "0xfc14846229f375124d8fed5cd9a789a271a303f5"
-)
+CRYPTO_ADDRESS = os.getenv("CRYPTO_ADDRESS", "0x...")
 CRYPTO_NETWORK = os.getenv("CRYPTO_NETWORK", "BEP20")
 
 REMITLY_INFO = os.getenv("REMITLY_INFO", "Send via Remitly")
@@ -88,7 +75,7 @@ PENDING_PAYMENTS: Dict[str, Dict[str, Any]] = {}
 PURCHASE_LOG: list = []
 KNOWN_USERS: set = set()
 SENT_INVITES: dict = {}  # user_id -> {"vip": link, "dark": link}
-CONFIG: dict = {}        # persisted config (vip/dark channel ids, upi, crypto, remitly, prices)
+CONFIG: dict = {}        # persisted config (channels, payment, price overrides)
 
 # ----------------- HELPERS -----------------
 def now_ist() -> datetime:
@@ -105,7 +92,6 @@ def _ensure_data_dir():
         logger.exception("Could not ensure data dir: %s", e)
 
 def _serialize_state() -> dict:
-    """Return a JSON-serializable snapshot of runtime state."""
     return {
         "pending_payments": PENDING_PAYMENTS,
         "purchase_log": [
@@ -118,7 +104,6 @@ def _serialize_state() -> dict:
     }
 
 def _deserialize_state(data: dict):
-    """Load JSON data into the runtime variables."""
     global PENDING_PAYMENTS, PURCHASE_LOG, KNOWN_USERS, SENT_INVITES, CONFIG
     if not data:
         return
@@ -145,21 +130,18 @@ def _deserialize_state(data: dict):
     CONFIG = data.get("config", {}) or {}
 
 def save_state():
-    """Atomically save runtime state to disk file."""
     try:
         _ensure_data_dir()
         payload = _serialize_state()
         fd, tmp = tempfile.mkstemp(dir=DATA_DIR)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
-        # atomic replace
         shutil.move(tmp, DATA_FILE)
         logger.info("State saved to %s", DATA_FILE)
     except Exception as e:
         logger.exception("Failed to save state: %s", e)
 
 def load_state():
-    """Load state from disk if file exists."""
     try:
         if not os.path.exists(DATA_FILE):
             logger.info("No data file found at %s — starting fresh", DATA_FILE)
@@ -176,25 +158,23 @@ async def create_and_store_invites(context: ContextTypes.DEFAULT_TYPE, user_id: 
     links_text = {}
     try:
         user_links = SENT_INVITES.setdefault(user_id, {})
-        # VIP
         if plan in ("vip", "both") and VIP_CHANNEL_ID:
             if "vip" not in user_links:
                 vip_obj = await context.bot.create_chat_invite_link(
                     chat_id=VIP_CHANNEL_ID,
                     member_limit=1,
-                    creates_join_request=True,   # <--- require join request
+                    creates_join_request=True,
                     name=f"user_{user_id}_vip"
                 )
                 user_links["vip"] = vip_obj.invite_link
                 save_state()
             links_text["vip"] = user_links.get("vip")
-        # DARK
         if plan in ("dark", "both") and DARK_CHANNEL_ID:
             if "dark" not in user_links:
                 dark_obj = await context.bot.create_chat_invite_link(
                     chat_id=DARK_CHANNEL_ID,
                     member_limit=1,
-                    creates_join_request=True,   # <--- require join request
+                    creates_join_request=True,
                     name=f"user_{user_id}_dark"
                 )
                 user_links["dark"] = dark_obj.invite_link
@@ -203,7 +183,6 @@ async def create_and_store_invites(context: ContextTypes.DEFAULT_TYPE, user_id: 
     except Exception as e:
         logger.exception("Error creating invite links for user %s: %s", user_id, e)
     return links_text
-
 
 async def send_invites_to_user(context: ContextTypes.DEFAULT_TYPE, user_id: int, plan: str):
     user_links = SENT_INVITES.get(user_id, {})
@@ -218,8 +197,7 @@ async def send_invites_to_user(context: ContextTypes.DEFAULT_TYPE, user_id: int,
     return False
 
 def get_price(plan: str, method: str):
-    # allow CONFIG override for prices if present
-    cfg = CONFIG.get("price_config", PRICE_CONFIG.copy())
+    cfg = CONFIG.get("price_config", PRICE_CONFIG)
     plan_cfg = cfg.get(plan, PRICE_CONFIG.get(plan, {}))
     if method == "upi":
         return plan_cfg.get("upi_inr"), "INR"
@@ -231,30 +209,21 @@ def get_price(plan: str, method: str):
 
 # ----------------- Handlers ------------------------------------------------
 async def handle_chat_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Called when someone clicks an invite link that creates a join request.
-    We verify purchase (PURCHASE_LOG) and approve/decline accordingly.
-    """
     req = update.chat_join_request
     if not req:
         return
-
     requester = req.from_user
-    chat = req.chat  # chat object (the channel/group)
+    chat = req.chat
     user_id = requester.id
     chat_id = chat.id
 
-    logger.info("Received join request from %s (%s) for chat %s", requester.username, user_id, chat_id)
+    logger.info("Join request from %s (%s) for chat %s", requester.username, user_id, chat_id)
 
-    # Verify that the user actually purchased for this chat
-    # Strategy: search PURCHASE_LOG for an entry with user_id and plan matching this chat
     def user_has_access_for_chat(uid: int, chat_id: int) -> bool:
-        # map chat_id -> plan names you use (VIP_CHANNEL_ID / DARK_CHANNEL_ID)
         for p in PURCHASE_LOG:
             try:
                 if p.get("user_id") == uid:
                     plan = p.get("plan")
-                    # accepted if plan includes this channel
                     if plan == "vip" and chat_id == VIP_CHANNEL_ID:
                         return True
                     if plan == "dark" and chat_id == DARK_CHANNEL_ID:
@@ -269,18 +238,15 @@ async def handle_chat_join_request(update: Update, context: ContextTypes.DEFAULT
 
     try:
         if allowed:
-            # Approve join request (bot approves it programmatically)
             await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
-            logger.info("Approved join request for %s into chat %s", user_id, chat_id)
-            # Optionally notify the user
+            logger.info("Approved join request %s -> %s", user_id, chat_id)
             try:
                 await context.bot.send_message(chat_id=user_id, text="✅ Your join request has been approved — welcome!")
             except Exception:
                 pass
         else:
-            # Decline
             await context.bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
-            logger.info("Declined join request for %s into chat %s", user_id, chat_id)
+            logger.info("Declined join request %s -> %s", user_id, chat_id)
             try:
                 await context.bot.send_message(chat_id=user_id, text="❌ We couldn't verify a purchase for this channel. Please contact support.")
             except Exception:
@@ -417,7 +383,6 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(msg, parse_mode="Markdown")
         return
 
-    # Admin approve/decline or sendlink callbacks
     if data.startswith("approve:") or data.startswith("decline:") or data.startswith("sendlink:"):
         action, payment_id = data.split(":", 1)
         payment = PENDING_PAYMENTS.get(payment_id)
@@ -446,20 +411,15 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "currency": currency,
             })
             save_state()
-            # create single-use invite links and store them, but DON'T send to user yet
             links = await create_and_store_invites(context, user_id, plan)
-            # send admin a button to actually send the invite to the user
             kb = [
                 [
                     InlineKeyboardButton("📤 Send access link to user", callback_data=f"sendlink:{payment_id}"),
                     InlineKeyboardButton("❌ Decline", callback_data=f"decline:{payment_id}"),
                 ]
             ]
-            await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=(f"✅ Payment approved for user {user_id}.\n\n"
-                                                                       "Click to send single-use access link to the user (one-time):"),
-                                           reply_markup=InlineKeyboardMarkup(kb))
+            await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=(f"✅ Payment approved for user {user_id}.\n\nClick to send single-use access link to the user (one-time):"), reply_markup=InlineKeyboardMarkup(kb))
             await query.message.reply_text(f"✅ Approved payment (ID: {payment_id}). Admin must click send to deliver link.")
-            # keep pending payment until link is sent or explicitly removed
             payment["invite_created"] = True
             payment["invite_links"] = links
             PENDING_PAYMENTS[payment_id] = payment
@@ -467,18 +427,16 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if action == "sendlink":
-            # send stored invite(s) to the user now
             sent = await send_invites_to_user(context, user_id, plan)
             if sent:
                 await query.message.reply_text(f"✅ Invite sent to user {user_id}.")
                 payment["invite_sent"] = True
-                PENDING_PAYMENTS.pop(payment_id, None)  # processed
+                PENDING_PAYMENTS.pop(payment_id, None)
                 save_state()
             else:
                 await query.message.reply_text("⚠️ No invite links available for this user; try re-creating them.")
             return
 
-        # decline case
         if action == "decline":
             try:
                 await context.bot.send_message(chat_id=user_id, text=("❌ Your payment could not be verified.\nIf this is a mistake, please send a clearer screenshot or contact support: " + HELP_BOT_USERNAME))
@@ -631,7 +589,6 @@ async def set_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("Amount must be a number.")
         return
-    # store in CONFIG overrides
     cfg = CONFIG.setdefault("price_config", {})
     plan_cfg = cfg.setdefault(plan, PRICE_CONFIG.get(plan, {})).copy()
     if method == "upi":
@@ -686,11 +643,9 @@ async def set_remitly(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ----------------- MAIN ----------------------------------------------------
 def main():
-    # ensure data dir & load previous state
     _ensure_data_dir()
     load_state()
 
-    # allow CONFIG values to seed current runtime variables
     global VIP_CHANNEL_ID, DARK_CHANNEL_ID, UPI_ID, CRYPTO_ADDRESS, REMITLY_INFO
     if CONFIG.get("channels", {}).get("vip"):
         VIP_CHANNEL_ID = int(CONFIG["channels"]["vip"])
@@ -716,6 +671,9 @@ def main():
     app.add_handler(MessageHandler((filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND, handle_payment_proof))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, warn_text_not_allowed))
 
+    # join request handler must be added so bot sees join requests
+    app.add_handler(ChatJoinRequestHandler(handle_chat_join_request))
+
     # admin handlers
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("income", income))
@@ -725,42 +683,31 @@ def main():
     app.add_handler(CommandHandler("set_remitly", set_remitly))
     app.add_handler(CommandHandler("set_vip", set_vip_channel))
     app.add_handler(CommandHandler("set_dark", set_dark_channel))
-    app.add_handler(ChatJoinRequestHandler(handle_chat_join_request))
-import threading
-import time
 
-def _autosave_thread():
+    # autosave thread
+    def _autosave_thread():
+        try:
+            while True:
+                time.sleep(60)
+                try:
+                    save_state()
+                except Exception:
+                    logger.exception("Autosave failed")
+        except Exception:
+            logger.exception("Autosave thread stopped unexpectedly")
+
+    autosave_t = threading.Thread(target=_autosave_thread, daemon=True)
+    autosave_t.start()
+
+    # run polling and ensure final save on exit
     try:
-        while True:
-            time.sleep(60)
-            try:
-                save_state()
-            except Exception:
-                logger.exception("Autosave failed")
-    except Exception:
-        logger.exception("Autosave thread stopped unexpectedly")
-
-# start autosave background thread (daemon so it won't block shutdown)
-autosave_t = threading.Thread(target=_autosave_thread, daemon=True)
-autosave_t.start()
-
-# ensure final save on exit (app.run_polling can raise on Ctrl+C)
-try:
-    app.run_polling()
-finally:
-    try:
-        save_state()
-    except Exception:
-        logger.exception("Final save failed")
-
-
-    # autosave job every 60 seconds
-    async def autosave_job(context: ContextTypes.DEFAULT_TYPE):
-        save_state()
-    app.job_queue.run_repeating(autosave_job, interval=60, first=60)
-
-    logger.info("Bot starting... (autosave every 60s)")
-    app.run_polling()
+        logger.info("Bot starting... (autosave every 60s)")
+        app.run_polling()
+    finally:
+        try:
+            save_state()
+        except Exception:
+            logger.exception("Final save failed")
 
 if __name__ == "__main__":
     main()
