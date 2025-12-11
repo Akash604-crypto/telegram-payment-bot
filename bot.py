@@ -1,4 +1,4 @@
- 
+  
 # bot.py
 import os
 import json
@@ -335,16 +335,25 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "After payment send screenshot/photo + TXID here."
             )
             await query.message.reply_text(msg, parse_mode="Markdown")
-        else:
-            msg = (
-                "🌍 *Remitly Payment Instructions*\n\n"
-                f"Plan: *{label}*\n"
-                f"Amount: *₹{amount}*\n\n"
-                f"Extra info: {REMITLY_INFO}\n\n"
-                f"⏳ Time limit: until *{deadline_str}*\n\n"
-                "After payment send screenshot/photo here."
-            )
-            await query.message.reply_text(msg, parse_mode="Markdown")
+       else:
+    # REMITLY message - corrected spacing and includes optional how-to link
+    howto = CONFIG.get("payment", {}).get("remitly_how_to_pay_link") or REMITLY_HOW_TO_PAY_LINK or ""
+    howto_line = f"\nExtra help / how to pay: {howto}\n\n" if howto else "\n"
+
+    msg = (
+        "🌍 *Remitly Payment Instructions*\n\n"
+        f"Plan: *{label}*\n"
+        f"Amount: *₹{amount}*\n\n"
+        f"{REMITLY_INFO}\n\n"  # ensure REMITLY_INFO already contains readable instructions
+        f"{howto_line}"
+        f"⏳ *Time limit:* please pay within 30 minutes (until *{deadline_str}*).\n\n"
+        "*After payment send me here:*\n"
+        "• Transfer complete screenshot (photo)\n"
+        "• Reference/UTR number (optional)\n"
+        "I’ll verify and then send your access links. ✅"
+    )
+    await query.message.reply_text(msg, parse_mode="Markdown")
+
         return
 
     if data.startswith("approve:") or data.startswith("decline:"):
@@ -560,15 +569,44 @@ async def set_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Crypto address updated to: {CRYPTO_ADDRESS}")
 
 async def set_remitly(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global REMITLY_INFO
+    """
+    Admin command to set Remitly help text and optional how-to link.
+    Usage:
+      /set_remitly Short instructions text
+    Or:
+      /set_remitly Short instructions text | https://t.me/yourlink
+    """
+    global REMITLY_INFO, REMITLY_HOW_TO_PAY_LINK
     user = update.effective_user
     if not is_admin(user.id):
         return
+
     if not context.args:
-        await update.message.reply_text("Usage: /set_remitly <short description>")
+        await update.message.reply_text(
+            "Usage: /set_remitly <instructions>  OR  /set_remitly <instructions> | <how_to_link>"
+        )
         return
-    REMITLY_INFO = " ".join(context.args)
-    await update.message.reply_text(f"Remitly info updated to:\n{REMITLY_INFO}")
+
+    # join args then allow optional '|' to separate text and link
+    raw = " ".join(context.args)
+    parts = [p.strip() for p in raw.split("|", 1)]
+    REMITLY_INFO = parts[0]
+    # ensure at least one trailing space/newline in stored info so templates concatenate cleanly
+    if not REMITLY_INFO.endswith("\n"):
+        REMITLY_INFO = REMITLY_INFO.strip()
+
+    if len(parts) > 1 and parts[1]:
+        REMITLY_HOW_TO_PAY_LINK = parts[1]
+    # persist both
+    CONFIG.setdefault("payment", {})["remitly_info"] = REMITLY_INFO
+    CONFIG.setdefault("payment", {})["remitly_how_to_pay_link"] = REMITLY_HOW_TO_PAY_LINK
+    save_state()
+
+    reply = "Remitly info updated."
+    if REMITLY_HOW_TO_PAY_LINK:
+        reply += f"\nHow-to-pay link saved: {REMITLY_HOW_TO_PAY_LINK}"
+    await update.message.reply_text(reply)
+
 
 # ----------------- MAIN -----------------
 def main():
