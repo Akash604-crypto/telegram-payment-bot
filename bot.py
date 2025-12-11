@@ -7,6 +7,16 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters,
+    ChatJoinRequestHandler,   
+)
+
 
 from telegram import (
     Update,
@@ -55,12 +65,13 @@ HELP_BOT_USERNAME = os.getenv("HELP_BOT_USERNAME", "@Dark123222_bot")
 HELP_BOT_USERNAME_MD = HELP_BOT_USERNAME.replace("_", "\\_")
 
 # Persistent data location (mounted disk)
-DATA_DIR = os.getenv("DATA_DIR", "/data")   # default to /data (Render disk mount)
+DATA_DIR = os.getenv("DATA_DIR", "/data")
 DATA_FILE = os.path.join(DATA_DIR, "paymentbot.json")
 
-# ----------------- CONSTANTS -----------------
+# Timezone (IST)
 IST = timezone(timedelta(hours=5, minutes=30))
 
+# ----------------- CONSTANTS -----------------
 PRICE_CONFIG = {
     "vip": {"upi_inr": 499, "crypto_usd": 6, "remit_inr": 499},
     "dark": {"upi_inr": 1999, "crypto_usd": 24, "remit_inr": 1999},
@@ -76,7 +87,8 @@ PLAN_LABELS = {
 PENDING_PAYMENTS: Dict[str, Dict[str, Any]] = {}
 PURCHASE_LOG: list = []
 KNOWN_USERS: set = set()
-SENT_INVITES: dict = {}
+SENT_INVITES: dict = {}  # user_id -> {"vip": link, "dark": link}
+CONFIG: dict = {}        # persisted config (vip/dark channel ids, upi, crypto, remitly, prices)
 
 # ----------------- HELPERS -----------------
 def now_ist() -> datetime:
@@ -85,7 +97,7 @@ def now_ist() -> datetime:
 def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_CHAT_ID
 
-# Persistence helpers -------------------------------------------------------
+# ----------------- Persistence helpers ------------------------------------
 def _ensure_data_dir():
     try:
         Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
@@ -96,37 +108,33 @@ def _serialize_state() -> dict:
     """Return a JSON-serializable snapshot of runtime state."""
     return {
         "pending_payments": PENDING_PAYMENTS,
-        # convert datetimes in purchase log to ISO strings
         "purchase_log": [
             {**{k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in p.items()}}
             for p in PURCHASE_LOG
         ],
         "known_users": list(KNOWN_USERS),
-        # SENT_INVITES: convert keys to strings for JSON
         "sent_invites": {str(k): v for k, v in SENT_INVITES.items()},
+        "config": CONFIG,
     }
 
 def _deserialize_state(data: dict):
     """Load JSON data into the runtime variables."""
-    global PENDING_PAYMENTS, PURCHASE_LOG, KNOWN_USERS, SENT_INVITES
+    global PENDING_PAYMENTS, PURCHASE_LOG, KNOWN_USERS, SENT_INVITES, CONFIG
     if not data:
         return
     PENDING_PAYMENTS = data.get("pending_payments", {}) or {}
     PURCHASE_LOG = []
     for p in data.get("purchase_log", []) or []:
-        # parse 'time' field back to datetime if present
         p_copy = dict(p)
         t = p_copy.get("time")
         if isinstance(t, str):
             try:
                 p_copy["time"] = datetime.fromisoformat(t)
             except Exception:
-                # fallback: leave as string
                 pass
         PURCHASE_LOG.append(p_copy)
     KNOWN_USERS = set(data.get("known_users", []) or [])
     sent = data.get("sent_invites", {}) or {}
-    # convert keys back to int if possible
     new_sent = {}
     for k, v in sent.items():
         try:
@@ -134,17 +142,18 @@ def _deserialize_state(data: dict):
         except Exception:
             new_sent[k] = v
     SENT_INVITES = new_sent
+    CONFIG = data.get("config", {}) or {}
 
 def save_state():
     """Atomically save runtime state to disk file."""
     try:
         _ensure_data_dir()
         payload = _serialize_state()
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=DATA_DIR)
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+        fd, tmp = tempfile.mkstemp(dir=DATA_DIR)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
         # atomic replace
-        shutil.move(tmp_path, DATA_FILE)
+        shutil.move(tmp, DATA_FILE)
         logger.info("State saved to %s", DATA_FILE)
     except Exception as e:
         logger.exception("Failed to save state: %s", e)
@@ -162,64 +171,126 @@ def load_state():
     except Exception as e:
         logger.exception("Failed to load state: %s", e)
 
-# ----------------- Bot functionality (same as before) -----------------
-async def send_access_links(context: ContextTypes.DEFAULT_TYPE, user_id: int, plan: str):
-    links_text = []
+# ----------------- bot functions -----------------------------------------
+async def create_and_store_invites(context: ContextTypes.DEFAULT_TYPE, user_id: int, plan: str):
+    links_text = {}
     try:
         user_links = SENT_INVITES.setdefault(user_id, {})
+        # VIP
         if plan in ("vip", "both") and VIP_CHANNEL_ID:
-            if "vip" in user_links:
-                vip_link = user_links["vip"]
-            else:
-                vip_link_obj = await context.bot.create_chat_invite_link(
-                    chat_id=VIP_CHANNEL_ID, member_limit=1, name=f"user_{user_id}_vip"
+            if "vip" not in user_links:
+                vip_obj = await context.bot.create_chat_invite_link(
+                    chat_id=VIP_CHANNEL_ID,
+                    member_limit=1,
+                    creates_join_request=True,   # <--- require join request
+                    name=f"user_{user_id}_vip"
                 )
-                vip_link = vip_link_obj.invite_link
-                user_links["vip"] = vip_link
-                # save invites after creation
+                user_links["vip"] = vip_obj.invite_link
                 save_state()
-            links_text.append(f"🔑 VIP Channel:\n{vip_link}")
-
+            links_text["vip"] = user_links.get("vip")
+        # DARK
         if plan in ("dark", "both") and DARK_CHANNEL_ID:
-            if "dark" in user_links:
-                dark_link = user_links["dark"]
-            else:
-                dark_link_obj = await context.bot.create_chat_invite_link(
-                    chat_id=DARK_CHANNEL_ID, member_limit=1, name=f"user_{user_id}_dark"
+            if "dark" not in user_links:
+                dark_obj = await context.bot.create_chat_invite_link(
+                    chat_id=DARK_CHANNEL_ID,
+                    member_limit=1,
+                    creates_join_request=True,   # <--- require join request
+                    name=f"user_{user_id}_dark"
                 )
-                dark_link = dark_link_obj.invite_link
-                user_links["dark"] = dark_link
+                user_links["dark"] = dark_obj.invite_link
                 save_state()
-            links_text.append(f"🕶 Dark Channel:\n{dark_link}")
-
+            links_text["dark"] = user_links.get("dark")
     except Exception as e:
         logger.exception("Error creating invite links for user %s: %s", user_id, e)
+    return links_text
 
-    if links_text:
-        text = "✅ Access granted!\n\n" + "\n\n".join(links_text)
-    else:
-        text = (
-            "✅ Payment approved.\n\n"
-            "But I couldn't generate channel links automatically. "
-            f"Please contact support: {HELP_BOT_USERNAME}"
-        )
-    await context.bot.send_message(chat_id=user_id, text=text)
+
+async def send_invites_to_user(context: ContextTypes.DEFAULT_TYPE, user_id: int, plan: str):
+    user_links = SENT_INVITES.get(user_id, {})
+    links = []
+    if plan in ("vip", "both") and user_links.get("vip"):
+        links.append(f"🔑 VIP Channel:\n{user_links['vip']}")
+    if plan in ("dark", "both") and user_links.get("dark"):
+        links.append(f"🕶 Dark Channel:\n{user_links['dark']}")
+    if links:
+        await context.bot.send_message(chat_id=user_id, text="✅ Access granted!\n\n" + "\n\n".join(links))
+        return True
+    return False
 
 def get_price(plan: str, method: str):
-    cfg = PRICE_CONFIG.get(plan, {})
+    # allow CONFIG override for prices if present
+    cfg = CONFIG.get("price_config", PRICE_CONFIG.copy())
+    plan_cfg = cfg.get(plan, PRICE_CONFIG.get(plan, {}))
     if method == "upi":
-        return cfg.get("upi_inr"), "INR"
+        return plan_cfg.get("upi_inr"), "INR"
     if method == "crypto":
-        return cfg.get("crypto_usd"), "USD"
+        return plan_cfg.get("crypto_usd"), "USD"
     if method == "remitly":
-        return cfg.get("remit_inr"), "INR"
+        return plan_cfg.get("remit_inr"), "INR"
     return None, ""
 
-# Handlers -----------------------------------------------------------------
+# ----------------- Handlers ------------------------------------------------
+async def handle_chat_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Called when someone clicks an invite link that creates a join request.
+    We verify purchase (PURCHASE_LOG) and approve/decline accordingly.
+    """
+    req = update.chat_join_request
+    if not req:
+        return
+
+    requester = req.from_user
+    chat = req.chat  # chat object (the channel/group)
+    user_id = requester.id
+    chat_id = chat.id
+
+    logger.info("Received join request from %s (%s) for chat %s", requester.username, user_id, chat_id)
+
+    # Verify that the user actually purchased for this chat
+    # Strategy: search PURCHASE_LOG for an entry with user_id and plan matching this chat
+    def user_has_access_for_chat(uid: int, chat_id: int) -> bool:
+        # map chat_id -> plan names you use (VIP_CHANNEL_ID / DARK_CHANNEL_ID)
+        for p in PURCHASE_LOG:
+            try:
+                if p.get("user_id") == uid:
+                    plan = p.get("plan")
+                    # accepted if plan includes this channel
+                    if plan == "vip" and chat_id == VIP_CHANNEL_ID:
+                        return True
+                    if plan == "dark" and chat_id == DARK_CHANNEL_ID:
+                        return True
+                    if plan == "both" and chat_id in (VIP_CHANNEL_ID, DARK_CHANNEL_ID):
+                        return True
+            except Exception:
+                continue
+        return False
+
+    allowed = user_has_access_for_chat(user_id, chat_id)
+
+    try:
+        if allowed:
+            # Approve join request (bot approves it programmatically)
+            await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+            logger.info("Approved join request for %s into chat %s", user_id, chat_id)
+            # Optionally notify the user
+            try:
+                await context.bot.send_message(chat_id=user_id, text="✅ Your join request has been approved — welcome!")
+            except Exception:
+                pass
+        else:
+            # Decline
+            await context.bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+            logger.info("Declined join request for %s into chat %s", user_id, chat_id)
+            try:
+                await context.bot.send_message(chat_id=user_id, text="❌ We couldn't verify a purchase for this channel. Please contact support.")
+            except Exception:
+                pass
+    except Exception as e:
+        logger.exception("Error approving/declining join request: %s", e)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     KNOWN_USERS.add(user.id)
-    # persist known users
     save_state()
 
     keyboard = [
@@ -346,7 +417,8 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(msg, parse_mode="Markdown")
         return
 
-    if data.startswith("approve:") or data.startswith("decline:"):
+    # Admin approve/decline or sendlink callbacks
+    if data.startswith("approve:") or data.startswith("decline:") or data.startswith("sendlink:"):
         action, payment_id = data.split(":", 1)
         payment = PENDING_PAYMENTS.get(payment_id)
         if query.from_user.id != ADMIN_CHAT_ID:
@@ -355,12 +427,14 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not payment:
             await query.message.reply_text("⚠️ This payment request was not found or already processed.")
             return
+
         user_id = payment["user_id"]
         plan = payment["plan"]
         method = payment["method"]
         amount = payment["amount"]
         currency = payment["currency"]
-        username = payment["username"]
+        username = payment.get("username", "")
+
         if action == "approve":
             PURCHASE_LOG.append({
                 "time": now_ist(),
@@ -371,23 +445,49 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "amount": amount,
                 "currency": currency,
             })
-            # persist purchase log
             save_state()
-            try:
-                await send_access_links(context, user_id, plan)
-            except Exception:
-                logger.exception("Error sending access links")
-            await query.message.reply_text(f"✅ Approved payment (ID: {payment_id}) for user {user_id} | {amount} {currency}")
-        else:
+            # create single-use invite links and store them, but DON'T send to user yet
+            links = await create_and_store_invites(context, user_id, plan)
+            # send admin a button to actually send the invite to the user
+            kb = [
+                [
+                    InlineKeyboardButton("📤 Send access link to user", callback_data=f"sendlink:{payment_id}"),
+                    InlineKeyboardButton("❌ Decline", callback_data=f"decline:{payment_id}"),
+                ]
+            ]
+            await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=(f"✅ Payment approved for user {user_id}.\n\n"
+                                                                       "Click to send single-use access link to the user (one-time):"),
+                                           reply_markup=InlineKeyboardMarkup(kb))
+            await query.message.reply_text(f"✅ Approved payment (ID: {payment_id}). Admin must click send to deliver link.")
+            # keep pending payment until link is sent or explicitly removed
+            payment["invite_created"] = True
+            payment["invite_links"] = links
+            PENDING_PAYMENTS[payment_id] = payment
+            save_state()
+            return
+
+        if action == "sendlink":
+            # send stored invite(s) to the user now
+            sent = await send_invites_to_user(context, user_id, plan)
+            if sent:
+                await query.message.reply_text(f"✅ Invite sent to user {user_id}.")
+                payment["invite_sent"] = True
+                PENDING_PAYMENTS.pop(payment_id, None)  # processed
+                save_state()
+            else:
+                await query.message.reply_text("⚠️ No invite links available for this user; try re-creating them.")
+            return
+
+        # decline case
+        if action == "decline":
             try:
                 await context.bot.send_message(chat_id=user_id, text=("❌ Your payment could not be verified.\nIf this is a mistake, please send a clearer screenshot or contact support: " + HELP_BOT_USERNAME))
             except Exception:
                 logger.exception("Can't send decline message to user")
             await query.message.reply_text(f"❌ Declined payment (ID: {payment_id})")
-        # remove pending
-        PENDING_PAYMENTS.pop(payment_id, None)
-        save_state()
-        return
+            PENDING_PAYMENTS.pop(payment_id, None)
+            save_state()
+            return
 
 async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -408,7 +508,6 @@ async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYP
         "amount": amount,
         "currency": currency,
     }
-    # persist pending payments
     save_state()
     try:
         await context.bot.forward_message(chat_id=ADMIN_CHAT_ID, from_chat_id=chat.id, message_id=message.message_id)
@@ -436,6 +535,8 @@ async def set_vip_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         VIP_CHANNEL_ID = int(context.args[0])
+        CONFIG.setdefault("channels", {})["vip"] = VIP_CHANNEL_ID
+        save_state()
         await update.message.reply_text(f"VIP_CHANNEL_ID updated to {VIP_CHANNEL_ID}")
     except ValueError:
         await update.message.reply_text("channel_id must be an integer (e.g. -1001234567890)")
@@ -450,6 +551,8 @@ async def set_dark_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         DARK_CHANNEL_ID = int(context.args[0])
+        CONFIG.setdefault("channels", {})["dark"] = DARK_CHANNEL_ID
+        save_state()
         await update.message.reply_text(f"DARK_CHANNEL_ID updated to {DARK_CHANNEL_ID}")
     except ValueError:
         await update.message.reply_text("channel_id must be an integer (e.g. -1009876543210)")
@@ -528,12 +631,18 @@ async def set_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("Amount must be a number.")
         return
+    # store in CONFIG overrides
+    cfg = CONFIG.setdefault("price_config", {})
+    plan_cfg = cfg.setdefault(plan, PRICE_CONFIG.get(plan, {})).copy()
     if method == "upi":
-        PRICE_CONFIG[plan]["upi_inr"] = amount
+        plan_cfg["upi_inr"] = amount
     elif method == "crypto":
-        PRICE_CONFIG[plan]["crypto_usd"] = amount
+        plan_cfg["crypto_usd"] = amount
     else:
-        PRICE_CONFIG[plan]["remit_inr"] = amount
+        plan_cfg["remit_inr"] = amount
+    cfg[plan] = plan_cfg
+    CONFIG["price_config"] = cfg
+    save_state()
     await update.message.reply_text(f"Updated price for {PLAN_LABELS.get(plan, plan)} [{method}] to {amount}.")
 
 async def set_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -545,6 +654,8 @@ async def set_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /set_upi <upi_id>")
         return
     UPI_ID = context.args[0]
+    CONFIG.setdefault("payment", {})["upi_id"] = UPI_ID
+    save_state()
     await update.message.reply_text(f"UPI ID updated to: {UPI_ID}")
 
 async def set_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -556,6 +667,8 @@ async def set_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /set_crypto <address>")
         return
     CRYPTO_ADDRESS = context.args[0]
+    CONFIG.setdefault("payment", {})["crypto_address"] = CRYPTO_ADDRESS
+    save_state()
     await update.message.reply_text(f"Crypto address updated to: {CRYPTO_ADDRESS}")
 
 async def set_remitly(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -567,13 +680,28 @@ async def set_remitly(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /set_remitly <short description>")
         return
     REMITLY_INFO = " ".join(context.args)
+    CONFIG.setdefault("payment", {})["remitly_info"] = REMITLY_INFO
+    save_state()
     await update.message.reply_text(f"Remitly info updated to:\n{REMITLY_INFO}")
 
-# ----------------- MAIN -----------------
+# ----------------- MAIN ----------------------------------------------------
 def main():
-    # Ensure data dir exists & load existing state
+    # ensure data dir & load previous state
     _ensure_data_dir()
     load_state()
+
+    # allow CONFIG values to seed current runtime variables
+    global VIP_CHANNEL_ID, DARK_CHANNEL_ID, UPI_ID, CRYPTO_ADDRESS, REMITLY_INFO
+    if CONFIG.get("channels", {}).get("vip"):
+        VIP_CHANNEL_ID = int(CONFIG["channels"]["vip"])
+    if CONFIG.get("channels", {}).get("dark"):
+        DARK_CHANNEL_ID = int(CONFIG["channels"]["dark"])
+    if CONFIG.get("payment", {}).get("upi_id"):
+        UPI_ID = CONFIG["payment"]["upi_id"]
+    if CONFIG.get("payment", {}).get("crypto_address"):
+        CRYPTO_ADDRESS = CONFIG["payment"]["crypto_address"]
+    if CONFIG.get("payment", {}).get("remitly_info"):
+        REMITLY_INFO = CONFIG["payment"]["remitly_info"]
 
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is not set in environment variables.")
@@ -597,8 +725,15 @@ def main():
     app.add_handler(CommandHandler("set_remitly", set_remitly))
     app.add_handler(CommandHandler("set_vip", set_vip_channel))
     app.add_handler(CommandHandler("set_dark", set_dark_channel))
+    app.add_handler(ChatJoinRequestHandler(handle_chat_join_request))
 
-    # start
+
+    # autosave job every 60 seconds
+    async def autosave_job(context: ContextTypes.DEFAULT_TYPE):
+        save_state()
+    app.job_queue.run_repeating(autosave_job, interval=60, first=60)
+
+    logger.info("Bot starting... (autosave every 60s)")
     app.run_polling()
 
 if __name__ == "__main__":
