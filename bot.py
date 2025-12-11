@@ -323,7 +323,12 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "After payment send screenshot/photo here plus optional UTR."
             )
             await query.message.reply_text(msg, parse_mode="Markdown")
-            await query.message.reply_photo(photo=UPI_QR_URL, caption=f"📷 Scan this QR to pay.\nUPI ID: `{UPI_ID}`", parse_mode="Markdown")
+            await query.message.reply_photo(
+                photo=UPI_QR_URL,
+                caption=f"📷 Scan this QR to pay.\nUPI ID: `{UPI_ID}`",
+                parse_mode="Markdown"
+            )
+
         elif method == "crypto":
             msg = (
                 "🪙 *Crypto Payment Instructions*\n\n"
@@ -335,26 +340,20 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "After payment send screenshot/photo + TXID here."
             )
             await query.message.reply_text(msg, parse_mode="Markdown")
-       else:
-    # REMITLY message - corrected spacing and includes optional how-to link
-    howto = CONFIG.get("payment", {}).get("remitly_how_to_pay_link") or REMITLY_HOW_TO_PAY_LINK or ""
-    howto_line = f"\nExtra help / how to pay: {howto}\n\n" if howto else "\n"
 
-    msg = (
-        "🌍 *Remitly Payment Instructions*\n\n"
-        f"Plan: *{label}*\n"
-        f"Amount: *₹{amount}*\n\n"
-        f"{REMITLY_INFO}\n\n"  # ensure REMITLY_INFO already contains readable instructions
-        f"{howto_line}"
-        f"⏳ *Time limit:* please pay within 30 minutes (until *{deadline_str}*).\n\n"
-        "*After payment send me here:*\n"
-        "• Transfer complete screenshot (photo)\n"
-        "• Reference/UTR number (optional)\n"
-        "I’ll verify and then send your access links. ✅"
-    )
-    await query.message.reply_text(msg, parse_mode="Markdown")
+        else:
+            msg = (
+                "🌍 *Remitly Payment Instructions*\n\n"
+                f"Plan: *{label}*\n"
+                f"Amount: *₹{amount}*\n\n"
+                f"Extra info: {REMITLY_INFO}\n\n"
+                f"⏳ Time limit: until *{deadline_str}*\n\n"
+                "After payment send screenshot/photo here."
+            )
+            await query.message.reply_text(msg, parse_mode="Markdown")
 
         return
+
 
     if data.startswith("approve:") or data.startswith("decline:"):
         action, payment_id = data.split(":", 1)
