@@ -726,6 +726,32 @@ def main():
     app.add_handler(CommandHandler("set_vip", set_vip_channel))
     app.add_handler(CommandHandler("set_dark", set_dark_channel))
     app.add_handler(ChatJoinRequestHandler(handle_chat_join_request))
+import threading
+import time
+
+def _autosave_thread():
+    try:
+        while True:
+            time.sleep(60)
+            try:
+                save_state()
+            except Exception:
+                logger.exception("Autosave failed")
+    except Exception:
+        logger.exception("Autosave thread stopped unexpectedly")
+
+# start autosave background thread (daemon so it won't block shutdown)
+autosave_t = threading.Thread(target=_autosave_thread, daemon=True)
+autosave_t.start()
+
+# ensure final save on exit (app.run_polling can raise on Ctrl+C)
+try:
+    app.run_polling()
+finally:
+    try:
+        save_state()
+    except Exception:
+        logger.exception("Final save failed")
 
 
     # autosave job every 60 seconds
