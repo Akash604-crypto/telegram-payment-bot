@@ -28,10 +28,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ----------------- CONFIG (env) -----------------
-# Payment bot (existing)
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Payment bot token
-# Help bot (new)
 HELP_BOT_TOKEN = os.getenv("HELP_BOT_TOKEN")  # Help bot token
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
+PAYMENT_BOT_USERNAME = os.getenv("PAYMENT_BOT_USERNAME")  # for redirect
+
 
 # Shared
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))  # admin Telegram ID
