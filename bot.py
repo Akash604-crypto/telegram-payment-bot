@@ -157,7 +157,17 @@ async def send_access_links(context: ContextTypes.DEFAULT_TYPE, user_id: int, pl
 
 
 
-def get_price(plan: str, method: str):
+def get_price(plan: str, method: str, context=None):
+    # If negotiated price exists
+    if context:
+        neg_price = context.user_data.get("negotiated_price")
+        neg_method = context.user_data.get("negotiated_method")
+        if neg_price and neg_method == method:
+            if method == "crypto":
+                return neg_price, "USD"
+            return neg_price, "INR"
+
+    # Default pricing
     cfg = PRICE_CONFIG.get(plan, {})
     if method == "upi":
         return cfg.get("upi_inr"), "INR"
@@ -166,6 +176,7 @@ def get_price(plan: str, method: str):
     if method == "remitly":
         return cfg.get("remit_inr"), "INR"
     return None, ""
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -203,6 +214,40 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
 
     # ---------- PLAN SELECTION ----------
+    # --- Negotiation START handler ---
+if context.args:
+    arg = context.args[0]
+    if arg.startswith("neg_"):   # format: neg_<plan>_<amount>_<method>
+        try:
+            _, plan, amount_str, method = arg.split("_", 3)
+
+            # store negotiated values
+            context.user_data["selected_plan"] = plan
+            context.user_data["negotiated_price"] = float(amount_str)
+            context.user_data["negotiated_method"] = method.lower()
+
+            # redirect user into the normal plan screen with updated price
+            upi_price, _ = get_price(plan, "upi")
+            crypto_price, _ = get_price(plan, "crypto")
+            remit_price, _ = get_price(plan, "remitly")
+
+            keyboard = [
+                [InlineKeyboardButton(f"💳 UPI (₹{upi_price})", callback_data="pay_upi")],
+                [InlineKeyboardButton(f"🪙 Crypto (${crypto_price})", callback_data="pay_crypto")],
+                [InlineKeyboardButton(f"🌍 Remitly (₹{remit_price})", callback_data="pay_remitly")],
+                [InlineKeyboardButton("⬅ Back", callback_data="back_start")],
+            ]
+
+            await update.message.reply_text(
+                f"Negotiated price accepted for *{plan.upper()}*.\nChoose payment method:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+            return
+
+        except Exception as e:
+            logger.error(f"Negotiation parsing error: {e}")
+
     if data in ("plan_vip", "plan_dark", "plan_both"):
         plan = data.split("_", 1)[1]  # 'vip' | 'dark' | 'both'
         context.user_data["selected_plan"] = plan
@@ -733,6 +778,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
