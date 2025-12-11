@@ -1,4 +1,4 @@
-no need is bot.py persistence now 
+ 
 # bot.py
 import os
 import json
