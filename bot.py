@@ -1,4 +1,4 @@
-  
+no need is bot.py persistence now 
 # bot.py
 import os
 import json
@@ -323,12 +323,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "After payment send screenshot/photo here plus optional UTR."
             )
             await query.message.reply_text(msg, parse_mode="Markdown")
-            await query.message.reply_photo(
-                photo=UPI_QR_URL,
-                caption=f"📷 Scan this QR to pay.\nUPI ID: `{UPI_ID}`",
-                parse_mode="Markdown"
-            )
-
+            await query.message.reply_photo(photo=UPI_QR_URL, caption=f"📷 Scan this QR to pay.\nUPI ID: `{UPI_ID}`", parse_mode="Markdown")
         elif method == "crypto":
             msg = (
                 "🪙 *Crypto Payment Instructions*\n\n"
@@ -340,7 +335,6 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "After payment send screenshot/photo + TXID here."
             )
             await query.message.reply_text(msg, parse_mode="Markdown")
-
         else:
             msg = (
                 "🌍 *Remitly Payment Instructions*\n\n"
@@ -351,9 +345,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "After payment send screenshot/photo here."
             )
             await query.message.reply_text(msg, parse_mode="Markdown")
-
         return
-
 
     if data.startswith("approve:") or data.startswith("decline:"):
         action, payment_id = data.split(":", 1)
@@ -568,44 +560,15 @@ async def set_crypto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Crypto address updated to: {CRYPTO_ADDRESS}")
 
 async def set_remitly(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Admin command to set Remitly help text and optional how-to link.
-    Usage:
-      /set_remitly Short instructions text
-    Or:
-      /set_remitly Short instructions text | https://t.me/yourlink
-    """
-    global REMITLY_INFO, REMITLY_HOW_TO_PAY_LINK
+    global REMITLY_INFO
     user = update.effective_user
     if not is_admin(user.id):
         return
-
     if not context.args:
-        await update.message.reply_text(
-            "Usage: /set_remitly <instructions>  OR  /set_remitly <instructions> | <how_to_link>"
-        )
+        await update.message.reply_text("Usage: /set_remitly <short description>")
         return
-
-    # join args then allow optional '|' to separate text and link
-    raw = " ".join(context.args)
-    parts = [p.strip() for p in raw.split("|", 1)]
-    REMITLY_INFO = parts[0]
-    # ensure at least one trailing space/newline in stored info so templates concatenate cleanly
-    if not REMITLY_INFO.endswith("\n"):
-        REMITLY_INFO = REMITLY_INFO.strip()
-
-    if len(parts) > 1 and parts[1]:
-        REMITLY_HOW_TO_PAY_LINK = parts[1]
-    # persist both
-    CONFIG.setdefault("payment", {})["remitly_info"] = REMITLY_INFO
-    CONFIG.setdefault("payment", {})["remitly_how_to_pay_link"] = REMITLY_HOW_TO_PAY_LINK
-    save_state()
-
-    reply = "Remitly info updated."
-    if REMITLY_HOW_TO_PAY_LINK:
-        reply += f"\nHow-to-pay link saved: {REMITLY_HOW_TO_PAY_LINK}"
-    await update.message.reply_text(reply)
-
+    REMITLY_INFO = " ".join(context.args)
+    await update.message.reply_text(f"Remitly info updated to:\n{REMITLY_INFO}")
 
 # ----------------- MAIN -----------------
 def main():
@@ -641,3 +604,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+here is my code save it and forget others
