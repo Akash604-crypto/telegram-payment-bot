@@ -1,8 +1,6 @@
-# bot.py
 import os
 import logging
 from datetime import datetime, timedelta, timezone
-import re
 
 from telegram import (
     Update,
@@ -17,7 +15,6 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from telegram.constants import ParseMode
 
 # ----------------- LOGGING -----------------
 logging.basicConfig(
@@ -27,6 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ----------------- CONFIG FROM ENV -----------------
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 
@@ -52,26 +50,29 @@ REMITLY_HOW_TO_PAY_LINK = os.getenv(
 )
 
 HELP_BOT_USERNAME = os.getenv("HELP_BOT_USERNAME", "@Dark123222_bot")
+HELP_BOT_USERNAME_MD = HELP_BOT_USERNAME.replace("_", "\\_")
+
 
 # Timezone (IST)
 IST = timezone(timedelta(hours=5, minutes=30))
 
 # ----------------- PRODUCTS & PRICES -----------------
+
 PRICE_CONFIG = {
-    "vip": {
+    "vip": {      # VIP channel only
         "upi_inr": 499,
         "crypto_usd": 6,
         "remit_inr": 499,
     },
-    "dark": {
+    "dark": {     # Dark channel only
         "upi_inr": 1999,
         "crypto_usd": 24,
         "remit_inr": 1999,
     },
-    "both": {
-        "upi_inr": 1749,
-        "crypto_usd": 21,
-        "remit_inr": 1749,
+    "both": {     # Both channels with 30% OFF on combined prices
+        "upi_inr": 1749,     # (499 + 1999) * 0.7
+        "crypto_usd": 21,    # (6 + 24) * 0.7
+        "remit_inr": 1749,    # (499 + 1999) * 0.7
     },
 }
 
@@ -82,10 +83,13 @@ PLAN_LABELS = {
 }
 
 # ----------------- RUNTIME STORAGE -----------------
+
 PENDING_PAYMENTS = {}    # payment_id -> {user_id,...}
 PURCHASE_LOG = []        # simple income log
 KNOWN_USERS = set()      # for broadcast
-SENT_INVITES = {}        # user_id -> {"vip": invite_link, "dark": invite_link}
+SENT_INVITES = {}  # user_id -> {"vip": invite_link, "dark": invite_link}
+
+
 
 # ----------------- HELPERS -----------------
 
@@ -98,57 +102,6 @@ def now_ist() -> datetime:
     return datetime.now(IST)
 
 
-# Markdown v2 escaping helper for safety (we're using Markdown here)
-def md_escape(text: str) -> str:
-    if not text:
-        return ""
-    # Escape characters that Markdown interprets in PTB when using ParseMode.MARKDOWN
-    # This escapes common troublesome characters for basic Markdown (underscores/backticks/asterisks/brackets)
-    replace_map = {
-        "\\": "\\\\",
-        "_": "\\_",
-        "*": "\\*",
-        "[": "\\[",
-        "]": "\\]",
-        "`": "\\`",
-        "<": "\\<",
-        ">": "\\>",
-        "(": "\\(",
-        ")": "\\)",
-        "~": "\\~",
-        "-": "\\-",
-        "+": "\\+",
-        "=": "\\=",
-        "|": "\\|",
-        "{": "\\{",
-        "}": "\\}",
-        ".": "\\.",  # dot sometimes causes offsets, safe to escape
-        "!": "\\!",
-        "#": "\\#",
-    }
-    # perform escaping
-    pattern = re.compile("|".join(re.escape(k) for k in replace_map.keys()))
-    return pattern.sub(lambda m: replace_map[m.group(0)], text)
-
-
-async def safe_edit_or_reply(message, text: str, reply_markup=None, parse_mode=ParseMode.MARKDOWN):
-    """Try to edit message; if it fails (deleted/parse problems), reply instead."""
-    try:
-        return await message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-    except Exception as e:
-        logger.debug("edit_text failed (%s) — falling back to reply_text", e)
-        try:
-            return await message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-        except Exception as e2:
-            logger.error("reply_text also failed: %s", e2)
-            # last fallback: send without parse_mode
-            try:
-                return await message.reply_text(text, reply_markup=reply_markup)
-            except Exception as e3:
-                logger.exception("Failed to send help message: %s", e3)
-                return None
-
-
 async def send_access_links(context: ContextTypes.DEFAULT_TYPE, user_id: int, plan: str):
     """
     Create one single-use invite link per channel for this user and send it.
@@ -157,6 +110,7 @@ async def send_access_links(context: ContextTypes.DEFAULT_TYPE, user_id: int, pl
     """
     links_text = []
     try:
+        # ensure user bucket exists
         user_links = SENT_INVITES.setdefault(user_id, {})
 
         # VIP
@@ -164,58 +118,43 @@ async def send_access_links(context: ContextTypes.DEFAULT_TYPE, user_id: int, pl
             if "vip" in user_links:
                 vip_link = user_links["vip"]
             else:
-                try:
-                    vip_link_obj = await context.bot.create_chat_invite_link(
-                        chat_id=VIP_CHANNEL_ID,
-                        member_limit=1,
-                        name=f"user_{user_id}_vip"
-                    )
-                    vip_link = vip_link_obj.invite_link
-                    user_links["vip"] = vip_link
-                except Exception as e:
-                    logger.error("Failed to create VIP invite link: %s", e)
-                    vip_link = None
-            if vip_link:
-                links_text.append(f"🔑 VIP Channel:\n{vip_link}")
+                vip_link_obj = await context.bot.create_chat_invite_link(
+                    chat_id=VIP_CHANNEL_ID,
+                    member_limit=1,
+                    name=f"user_{user_id}_vip"
+                )
+                vip_link = vip_link_obj.invite_link
+                user_links["vip"] = vip_link
+            links_text.append(f"🔑 VIP Channel:\n{vip_link}")
 
         # DARK
         if plan in ("dark", "both") and DARK_CHANNEL_ID:
             if "dark" in user_links:
                 dark_link = user_links["dark"]
             else:
-                try:
-                    dark_link_obj = await context.bot.create_chat_invite_link(
-                        chat_id=DARK_CHANNEL_ID,
-                        member_limit=1,
-                        name=f"user_{user_id}_dark"
-                    )
-                    dark_link = dark_link_obj.invite_link
-                    user_links["dark"] = dark_link
-                except Exception as e:
-                    logger.error("Failed to create DARK invite link: %s", e)
-                    dark_link = None
-            if dark_link:
-                links_text.append(f"🕶 Dark Channel:\n{dark_link}")
+                dark_link_obj = await context.bot.create_chat_invite_link(
+                    chat_id=DARK_CHANNEL_ID,
+                    member_limit=1,
+                    name=f"user_{user_id}_dark"
+                )
+                dark_link = dark_link_obj.invite_link
+                user_links["dark"] = dark_link
+            links_text.append(f"🕶 Dark Channel:\n{dark_link}")
 
     except Exception as e:
-        logger.exception("Error building invite links for %s: %s", user_id, e)
+        logger.error(f"Error creating invite links for user {user_id}: {e}")
 
     if links_text:
         text = "✅ Access granted!\n\n" + "\n\n".join(links_text)
-        try:
-            await context.bot.send_message(chat_id=user_id, text=text)
-        except Exception as e:
-            logger.error("Failed to send access links to user %s: %s", user_id, e)
     else:
         text = (
             "✅ Payment approved.\n\n"
-            "But I couldn't generate channel links automatically.\n"
+            "But I couldn't generate channel links automatically. "
             f"Please contact support: {HELP_BOT_USERNAME}"
         )
-        try:
-            await context.bot.send_message(chat_id=user_id, text=text)
-        except Exception as e:
-            logger.error("Failed to send fallback help to user %s: %s", user_id, e)
+
+    await context.bot.send_message(chat_id=user_id, text=text)
+
 
 
 def get_price(plan: str, method: str):
@@ -228,12 +167,9 @@ def get_price(plan: str, method: str):
         return cfg.get("remit_inr"), "INR"
     return None, ""
 
-
-# ----------------- HANDLERS -----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if user:
-        KNOWN_USERS.add(user.id)
+    KNOWN_USERS.add(user.id)
 
     keyboard = [
         [InlineKeyboardButton("💎 VIP Channel (₹499)", callback_data="plan_vip")],
@@ -252,16 +188,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "After you choose a plan, I'll show payment options."
     )
 
-    # If this update has a message -> normal /start; if it's callback_query we'll reply to message
     if update.message:
         await update.message.reply_text(text, reply_markup=reply_markup)
     else:
-        # callback scenario
-        try:
-            await update.callback_query.message.reply_text(text, reply_markup=reply_markup)
-        except Exception:
-            # fallback
-            await context.bot.send_message(chat_id=update.callback_query.from_user.id, text=text, reply_markup=reply_markup)
+        await update.callback_query.message.reply_text(text, reply_markup=reply_markup)
+
+# ----------------- COMMAND HANDLERS (USER) -----------------
 
 
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -291,30 +223,40 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        text = f"You selected: *{md_escape(label)}*\n\nChoose your payment method below:"
-        await safe_edit_or_reply(query.message, text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+        text = (
+            f"You selected: *{label}*\n\n"
+            "Choose your payment method below:"
+        )
+        await query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
         return
 
     # ---------- HELP BUTTON ----------
     if data == "plan_help":
         help_text = (
             "🆘 *Help & Support*\n\n"
-            f"For any assistance, contact: {md_escape(HELP_BOT_USERNAME)}\n\n"
+            f"For any assistance, contact: {HELP_BOT_USERNAME_MD}\n\n"
             "Type /start anytime to restart."
         )
-        await safe_edit_or_reply(query.message, help_text, parse_mode=ParseMode.MARKDOWN)
+        # Try to edit the current message (safer), fall back to reply if edit fails
+        try:
+            await query.message.edit_text(help_text, parse_mode="Markdown")
+        except Exception:
+            await query.message.reply_text(help_text, parse_mode="Markdown")
         return
+
 
     # ---------- BACK TO START ----------
     if data == "back_start":
-        # call start with the same update (it will handle callback path)
-        await start(update, context)
+        fake_update = Update(update.update_id, message=update.effective_message)
+        await start(fake_update, context)
         return
 
     # ---------- PAYMENT METHOD BUTTONS ----------
     user_plan = context.user_data.get("selected_plan")
     if data in ("pay_upi", "pay_crypto", "pay_remitly") and not user_plan:
-        await query.message.reply_text("First choose a plan with /start before selecting payment method.")
+        await query.message.reply_text(
+            "First choose a plan with /start before selecting payment method."
+        )
         return
 
     if data in ("pay_upi", "pay_crypto", "pay_remitly"):
@@ -336,57 +278,53 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if method == "upi":
             msg = (
                 "🧾 *UPI Payment Instructions*\n\n"
-                f"Plan: *{md_escape(label)}*\n"
+                f"Plan: *{label}*\n"
                 f"Amount: *₹{amount}*\n\n"
-                f"UPI ID: `{md_escape(UPI_ID)}`\n\n"
+                f"UPI ID: `{UPI_ID}`\n\n"
                 "1️⃣ Open any UPI app (GPay, PhonePe, Paytm, etc.)\n"
                 "2️⃣ Choose *Scan & Pay* or *Pay UPI ID*\n"
                 "3️⃣ Either scan the QR image below or pay directly to the UPI ID above.\n"
                 "4️⃣ Enter the amount shown above and confirm.\n\n"
-                f"If you're confused, see this guide: {md_escape(UPI_HOW_TO_PAY_LINK)}\n\n"
+                f"If you're confused, see this guide: {UPI_HOW_TO_PAY_LINK}\n\n"
                 f"⏳ *Time limit:* Please pay within 30 minutes.\n"
-                f"Your slot expires at: *{md_escape(deadline_str)}*\n\n"
+                f"Your slot expires at: *{deadline_str}*\n\n"
                 "*After payment send me here:*\n"
                 "• Payment screenshot (photo)\n"
                 "• UTR number (optional, as text)\n"
                 "I’ll verify and then send your access links. ✅"
             )
 
-            await query.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
-            try:
-                await query.message.reply_photo(
-                    photo=UPI_QR_URL,
-                    caption=f"📷 Scan this QR to pay via UPI.\nUPI ID: `{md_escape(UPI_ID)}`",
-                    parse_mode=ParseMode.MARKDOWN,
-                )
-            except Exception:
-                # if caption parse fails, send without parse mode
-                await query.message.reply_photo(photo=UPI_QR_URL, caption=f"📷 Scan this QR to pay via UPI.\nUPI ID: {UPI_ID}")
+            await query.message.reply_text(msg, parse_mode="Markdown")
+            await query.message.reply_photo(
+                photo=UPI_QR_URL,
+                caption=f"📷 Scan this QR to pay via UPI.\nUPI ID: `{UPI_ID}`",
+                parse_mode="Markdown",
+            )
 
         elif method == "crypto":
             msg = (
                 "🪙 *Crypto Payment Instructions*\n\n"
-                f"Plan: *{md_escape(label)}*\n"
-                f"Amount: *${md_escape(str(amount))}*\n\n"
-                f"Network: `{md_escape(CRYPTO_NETWORK)}`\n"
-                f"Address: `{md_escape(CRYPTO_ADDRESS)}`\n\n"
+                f"Plan: *{label}*\n"
+                f"Amount: *${amount}*\n\n"
+                f"Network: `{CRYPTO_NETWORK}`\n"
+                f"Address: `{CRYPTO_ADDRESS}`\n\n"
                 "1️⃣ Open your crypto wallet.\n"
-                f"2️⃣ Select *Send* on `{md_escape(CRYPTO_NETWORK)}` network.\n"
+                f"2️⃣ Select *Send* on `{CRYPTO_NETWORK}` network.\n"
                 "3️⃣ Paste the address above.\n"
                 "4️⃣ Enter the amount and confirm.\n\n"
-                f"⏳ *Time limit:* 30 minutes (until *{md_escape(deadline_str)}*).\n\n"
+                f"⏳ *Time limit:* 30 minutes (until *{deadline_str}*).\n\n"
                 "*After payment send me here:*\n"
                 "• Transaction screenshot\n"
                 "• TxID / Hash (optional)\n"
                 "I’ll verify and then send your access links. ✅"
             )
-            await query.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+            await query.message.reply_text(msg, parse_mode="Markdown")
 
         elif method == "remitly":
             msg = (
                 "🌍 *Remitly Payment Instructions*\n\n"
-                f"Plan: *{md_escape(label)}*\n"
-                f"Amount: *₹{md_escape(str(amount))}*\n\n"
+                f"Plan: *{label}*\n"
+                f"Amount: *₹{amount}*\n\n"
                 "👉 Select *India* as destination and enter the amount above.\n\n"
                 "👉 Recipient Name: *Govind Mahto*\n"
                 "👉 UPI ID: `govindmahto21@axl`\n"
@@ -394,14 +332,14 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "⚠ *IMPORTANT:*\n"
                 "• Ensure I receive the exact INR amount.\n"
                 "• Take a screenshot of the *Transfer Complete* screen.\n\n"
-                f"Extra help / how to pay: {md_escape(REMITLY_HOW_TO_PAY_LINK)}\n\n"
-                f"⏳ *Time limit:* 30 minutes (until *{md_escape(deadline_str)}*).\n\n"
+                f"Extra help / how to pay: {REMITLY_HOW_TO_PAY_LINK}\n\n"
+                f"⏳ *Time limit:* 30 minutes (until *{deadline_str}*).\n\n"
                 "*After payment send me here:*\n"
                 "• Transfer complete screenshot\n"
                 "• Reference/UTR number (optional)\n"
                 "I’ll verify and then send your access links. ✅"
             )
-            await query.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+            await query.message.reply_text(msg, parse_mode="Markdown")
 
         return
 
@@ -415,7 +353,9 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if not payment:
-            await query.message.reply_text("⚠️ This payment request was not found or already processed.")
+            await query.message.reply_text(
+                "⚠️ This payment request was not found or already processed."
+            )
             return
 
         user_id = payment["user_id"]
@@ -423,26 +363,30 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         method = payment["method"]
         amount = payment["amount"]
         currency = payment["currency"]
-        username = payment.get("username", "")
+        username = payment["username"]
 
         if action == "approve":
-            PURCHASE_LOG.append({
-                "time": now_ist(),
-                "user_id": user_id,
-                "username": username,
-                "plan": plan,
-                "method": method,
-                "amount": amount,
-                "currency": currency,
-            })
+            PURCHASE_LOG.append(
+                {
+                    "time": now_ist(),
+                    "user_id": user_id,
+                    "username": username,
+                    "plan": plan,
+                    "method": method,
+                    "amount": amount,
+                    "currency": currency,
+                }
+            )
 
             try:
                 await send_access_links(context, user_id, plan)
             except Exception as e:
-                logger.exception("Error sending access links to user %s: %s", user_id, e)
+                logger.error(f"Error sending access links to user {user_id}: {e}")
 
             await query.message.reply_text(
-                f"✅ Approved payment (ID: {payment_id}) for user {user_id} | Plan: {PLAN_LABELS.get(plan, plan)} | {amount} {currency}"
+                f"✅ Approved payment (ID: {payment_id}) "
+                f"for user {user_id} | Plan: {PLAN_LABELS.get(plan, plan)} | "
+                f"{amount} {currency}"
             )
 
         else:  # decline
@@ -455,17 +399,19 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ),
                 )
             except Exception as e:
-                logger.exception("Error sending decline notice to user %s: %s", user_id, e)
+                logger.error(f"Error sending decline to user {user_id}: {e}")
 
             await query.message.reply_text(
-                f"❌ Declined payment (ID: {payment_id}) for user {user_id} | Plan: {PLAN_LABELS.get(plan, plan)}"
+                f"❌ Declined payment (ID: {payment_id}) "
+                f"for user {user_id} | Plan: {PLAN_LABELS.get(plan, plan)}"
             )
 
         PENDING_PAYMENTS.pop(payment_id, None)
-        return
 
 
 # ----------------- PAYMENT PROOF HANDLING -----------------
+
+
 async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
@@ -482,7 +428,7 @@ async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYP
     if deadline_ts:
         deadline = datetime.fromtimestamp(deadline_ts, tz=IST)
         if now_ist() > deadline:
-            expired_note = "\n\n⚠️ NOTE: Payment window (30 mins) is expired. Please double-check manually."
+            expired_note = "\n\n⚠️ NOTE: Payment window (30 mins) is *expired*. Please double-check manually."
 
     amount, currency = get_price(plan, method)
 
@@ -504,7 +450,7 @@ async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYP
             message_id=message.message_id,
         )
     except Exception as e:
-        logger.exception("Error forwarding payment proof to admin: %s", e)
+        logger.error(f"Error forwarding message to admin: {e}")
 
     keyboard = [
         [
@@ -516,30 +462,28 @@ async def handle_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYP
 
     admin_text = (
         "💰 New payment request\n\n"
-        f"From: @{md_escape(user.username or 'NoUsername')} (ID: {user.id})\n"
-        f"Plan: {md_escape(PLAN_LABELS.get(plan, plan))}\n"
-        f"Method: {md_escape(method.upper())}\n"
-        f"Amount: {md_escape(str(amount))} {md_escape(currency)}\n"
-        f"Payment ID: {md_escape(payment_id)}{md_escape(expired_note)}\n\n"
+        f"From: @{user.username or 'NoUsername'} (ID: {user.id})\n"
+        f"Plan: {PLAN_LABELS.get(plan, plan)}\n"
+        f"Method: {method.upper()}\n"
+        f"Amount: {amount} {currency}\n"
+        f"Payment ID: {payment_id}{expired_note}\n\n"
         "Check the forwarded screenshot/message above, then tap Approve or Decline:"
     )
 
     try:
-        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-    except Exception as e:
-        logger.exception("Error sending admin decision message: %s", e)
-        # try without markdown
-        try:
-            await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_text, reply_markup=reply_markup)
-        except Exception as e2:
-            logger.exception("Failed to notify admin at all: %s", e2)
-
-    try:
-        await message.reply_text(
-            "✅ Payment proof received.\n\nPlease wait while we manually verify it. You will get your channel access links here after approval. ⏳"
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=admin_text,
+            reply_markup=reply_markup,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Error sending admin decision message: {e}")
+
+    await message.reply_text(
+        "✅ Payment proof received.\n\n"
+        "Please wait while we manually verify it. "
+        "You will get your channel access links here after approval. ⏳"
+    )
 
 
 async def warn_text_not_allowed(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -548,15 +492,17 @@ async def warn_text_not_allowed(update: Update, context: ContextTypes.DEFAULT_TY
     if not method or not plan:
         return
 
-    try:
-        await update.message.reply_text(
-            "⚠️ Please send a screenshot/photo or document of your payment only. Plain text messages cannot be verified."
-        )
-    except Exception:
-        pass
+    await update.message.reply_text(
+        "⚠️ Please *send a screenshot/photo or document of your payment only.*\n"
+        "Plain text messages cannot be verified.",
+        parse_mode="Markdown",
+    )
 
 
 # ----------------- ADMIN COMMANDS -----------------
+# (broadcast, income, set_price, set_upi, set_crypto, set_remitly)
+#  -- keep your existing implementations here, they were fine --
+
 async def set_vip_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global VIP_CHANNEL_ID
     user = update.effective_user
@@ -570,7 +516,6 @@ async def set_vip_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"VIP_CHANNEL_ID updated to {VIP_CHANNEL_ID}")
     except ValueError:
         await update.message.reply_text("channel_id must be an integer (e.g. -1001234567890)")
-
 
 async def set_dark_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global DARK_CHANNEL_ID
@@ -586,27 +531,31 @@ async def set_dark_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("channel_id must be an integer (e.g. -1009876543210)")
 
-
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not is_admin(user.id):
         return
 
     if not context.args:
-        await update.message.reply_text("Usage: /broadcast your message text\nThis will send the text to all users who started the bot.")
+        await update.message.reply_text(
+            "Usage: /broadcast your message text\n\n"
+            "This will send the text to all users who started the bot."
+        )
         return
 
     text = " ".join(context.args)
     sent = 0
     failed = 0
-    for uid in list(KNOWN_USERS):
+    for uid in KNOWN_USERS:
         try:
             await context.bot.send_message(chat_id=uid, text=text)
             sent += 1
         except Exception:
             failed += 1
 
-    await update.message.reply_text(f"Broadcast done.\n✅ Sent: {sent}\n❌ Failed: {failed}")
+    await update.message.reply_text(
+        f"Broadcast done.\n✅ Sent: {sent}\n❌ Failed: {failed}"
+    )
 
 
 async def income(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -620,7 +569,9 @@ async def income(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     now = now_ist()
     if mode == "yesterday":
-        start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        start = (now - timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
         end = start + timedelta(days=1)
         label = "Yesterday"
     elif mode in ("7d", "7days", "last7"):
@@ -646,14 +597,14 @@ async def income(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 total_usd += p["amount"] or 0
 
     msg = (
-        f"📊 *Income Insights – {md_escape(label)}*\n\n"
+        f"📊 *Income Insights – {label}*\n\n"
         f"Total orders: *{count}*\n"
         f"INR collected: *₹{total_inr}*\n"
         f"USD collected (crypto): *${total_usd}*\n\n"
         "_Note: stats reset if the bot restarts or redeploys._"
     )
 
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
 
 async def set_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -662,7 +613,10 @@ async def set_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) != 3:
-        await update.message.reply_text("Usage: /set_price <vip|dark|both> <upi|crypto|remitly> <amount>\nExample: /set_price vip upi 599")
+        await update.message.reply_text(
+            "Usage: /set_price <vip|dark|both> <upi|crypto|remitly> <amount>\n"
+            "Example: /set_price vip upi 599"
+        )
         return
 
     plan, method, amount_str = context.args
@@ -686,7 +640,9 @@ async def set_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         PRICE_CONFIG[plan]["remit_inr"] = amount
 
-    await update.message.reply_text(f"Updated price for {PLAN_LABELS.get(plan, plan)} [{method}] to {amount}.")
+    await update.message.reply_text(
+        f"Updated price for {PLAN_LABELS.get(plan, plan)} [{method}] to {amount}."
+    )
 
 
 async def set_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -732,6 +688,8 @@ async def set_remitly(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ----------------- MAIN -----------------
+
+
 def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is not set in environment variables.")
@@ -740,10 +698,8 @@ def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # user commands
     app.add_handler(CommandHandler("start", start))
 
-    # admin commands
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("income", income))
     app.add_handler(CommandHandler("set_price", set_price))
@@ -751,12 +707,12 @@ def main():
     app.add_handler(CommandHandler("set_crypto", set_crypto))
     app.add_handler(CommandHandler("set_remitly", set_remitly))
 
-    # admin runtime channel setters
+    # admin helpers to set channel IDs at runtime
     app.add_handler(CommandHandler("set_vip", set_vip_channel))
     app.add_handler(CommandHandler("set_dark", set_dark_channel))
 
-    # callbacks and message handlers
     app.add_handler(CallbackQueryHandler(handle_buttons))
+
 
     app.add_handler(
         MessageHandler(
@@ -772,9 +728,18 @@ def main():
         )
     )
 
-    logger.info("Starting bot polling...")
     app.run_polling()
 
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
